@@ -1,0 +1,9 @@
+[project]
+name = "piper-arm"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "piper-sdk>=0.6.1",
+]
