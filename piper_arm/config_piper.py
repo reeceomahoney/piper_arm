@@ -30,5 +30,3 @@ class PiperConfig(RobotConfig):
     use_degrees: bool = True
     # Timeout in seconds to wait for SDK EnablePiper during connect
     enable_timeout: float = 5.0
-    # Passthrough mode: when True, send_action is a no-op (for master-slave CAN setups)
-    passthrough_mode: bool = False

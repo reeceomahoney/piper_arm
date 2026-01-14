@@ -1,13 +1,10 @@
 from typing import Any
-import logging
 
 from lerobot.cameras import make_cameras_from_configs
 from lerobot.robots import Robot
 
 from .config_piper import PiperConfig
 from .piper_sdk_interface import PiperSDKInterface
-
-logger = logging.getLogger(__name__)
 
 
 class Piper(Robot):
@@ -79,10 +76,6 @@ class Piper(Robot):
     def configure(self) -> None:
         pass
 
-    def _apply_signs(self, joints_deg: list[float]) -> list[float]:
-        signs = self.config.joint_signs
-        return [d * s for d, s in zip(joints_deg, signs, strict=True)]
-
     def _get_hw_limits(self) -> tuple[list[float], list[float]]:
         if self._iface is None:
             raise RuntimeError("Piper SDK interface not available")
@@ -148,80 +141,5 @@ class Piper(Robot):
         return obs
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
-        if not self.is_connected or self._iface is None:
-            raise ConnectionError(f"{self} is not connected.")
-
-        # In passthrough mode, the hardware handles control - just return the action
-        if self.config.passthrough_mode:
-            return action
-        # Use current observation as fallback to avoid KeyError / None crash
-        try:
-            obs = self.get_observation()
-        except Exception:
-            # If observation can't be read, fallback to zeros for safety
-            obs = {f"{name}.pos": 0.0 for name in self.config.joint_names}
-            if self.config.include_gripper:
-                obs["gripper.pos"] = 0.0
-
-        hw_min, hw_max = self._get_hw_limits()
-
-        if self.config.use_degrees:
-            def to_oriented_deg(value: float, idx: int) -> float:  # type: ignore[no-redef]
-                return value
-        else:
-            oriented_min, oriented_max = self._get_oriented_limits()
-
-            def to_oriented_deg(value: float, idx: int) -> float:  # type: ignore[no-redef]
-                p = max(-100.0, min(100.0, value))
-                p01 = (p + 100.0) / 200.0
-                rng_min = oriented_min[idx]
-                rng_max = oriented_max[idx]
-                if rng_max <= rng_min:
-                    return rng_min
-                return rng_min + p01 * (rng_max - rng_min)
-
-        name_to_idx = {name: idx for idx, name in enumerate(self.config.joint_names)}
-        oriented_deg: dict[str, float] = {}
-
-        for name, idx in name_to_idx.items():
-            key = f"{name}.pos"
-            raw = action.get(key, obs.get(key, 0.0))
-            try:
-                val = float(raw)
-            except Exception:
-                logger.warning("Invalid value for %s: %r, falling back to observation/default", key, raw)
-                val = float(obs.get(key, 0.0))
-            oriented_deg[name] = to_oriented_deg(val, idx)
-
-        joints_hw_deg = []
-        for name, idx in name_to_idx.items():
-            deg_oriented = oriented_deg[name]
-            deg_hw = deg_oriented * self.config.joint_signs[idx]
-            deg_hw = max(hw_min[idx], min(hw_max[idx], deg_hw))
-            joints_hw_deg.append(deg_hw)
-
-        if self.config.include_gripper:
-            g_raw = action.get("gripper.pos", obs.get("gripper.pos", None))
-            gripper_mm = None
-            if g_raw is not None:
-                try:
-                    if self.config.use_degrees:
-                        gripper_mm = float(g_raw)
-                    else:
-                        p = max(0.0, min(100.0, float(g_raw)))
-                        g_min = hw_min[6]
-                        g_max = hw_max[6]
-                        gripper_mm = g_min + (g_max - g_min) * (p / 100.0)
-                except Exception:
-                    logger.warning("Invalid gripper.pos value %r, ignoring", g_raw)
-                    gripper_mm = None
-        else:
-            gripper_mm = None
-
-        try:
-            self._iface.set_joint_positions_deg(joints_hw_deg, gripper_mm)
-        except Exception as e:
-            logger.exception("Failed to send joint positions: %s", e)
-            raise
-
+        # Hardware handles control via master-slave CAN - just return the action
         return action

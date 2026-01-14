@@ -1,4 +1,4 @@
-# Passthrough teleoperator for Piper arms in master-slave CAN configuration
+# Teleoperator for Piper arms in master-slave CAN configuration
 #
 # This teleoperator reads control commands (GetArmJointCtrl) from the CAN bus
 # rather than sending commands. Use this when the hardware already handles
@@ -18,10 +18,10 @@ except Exception:
     C_PiperInterface_V2 = None
 
 
-@TeleoperatorConfig.register_subclass("piper_passthrough")
+@TeleoperatorConfig.register_subclass("piper_teleop")
 @dataclass
-class PiperPassthroughConfig(TeleoperatorConfig):
-    # CAN interface to read control commands from (typically the follower arm)
+class PiperTeleoperatorConfig(TeleoperatorConfig):
+    # CAN interface to read control commands from
     can_interface: str = "can0"
     # Joint names matching the robot configuration
     joint_names: list[str] = field(
@@ -35,25 +35,22 @@ class PiperPassthroughConfig(TeleoperatorConfig):
     use_degrees: bool = True
 
 
-class PiperPassthroughTeleoperator(Teleoperator):
+class PiperTeleoperator(Teleoperator):
     """
-    A passthrough teleoperator for Piper arms in hardware master-slave configuration.
+    A teleoperator for Piper arms in hardware master-slave configuration.
 
     This teleoperator reads the control commands (GetArmJointCtrl) that the master
     is sending, rather than generating new commands. The actual teleoperation is
     handled by the CAN hardware - this just records what commands are being sent.
 
-    Unlike the full PiperSDKInterface, this uses a read-only connection that
-    doesn't call EnablePiper, so it can coexist with another SDK interface
-    on the same CAN bus.
-
-    Use this with a Robot configured with passthrough_mode=True.
+    Uses a read-only connection that doesn't call EnablePiper, so it can coexist
+    with another SDK interface on the same CAN bus.
     """
 
-    config_class = PiperPassthroughConfig
-    name = "piper_passthrough"
+    config_class = PiperTeleoperatorConfig
+    name = "piper_teleop"
 
-    def __init__(self, config: PiperPassthroughConfig):
+    def __init__(self, config: PiperTeleoperatorConfig):
         super().__init__(config)
         self.config = config
         self._piper = None
@@ -87,7 +84,7 @@ class PiperPassthroughTeleoperator(Teleoperator):
             self._piper.ConnectPort()
             # NOTE: We intentionally skip EnablePiper() here since the robot
             # will handle that. We just need to read the control commands.
-            log.info("PiperPassthroughTeleoperator connected (read-only mode)")
+            log.info("PiperTeleoperator connected (read-only mode)")
 
         self.configure()
 

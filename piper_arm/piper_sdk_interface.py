@@ -2,7 +2,6 @@
 
 import time
 import logging
-from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -69,47 +68,6 @@ class PiperSDKInterface:
             self.min_pos = [-180.0] * 6 + [0.0]
             self.max_pos = [180.0] * 6 + [10.0]
 
-    def set_joint_positions(self, positions):
-        """
-        positions: list of 7 floats (first 6 are -100..100 percent; last is gripper 0..100).
-        This helper maps percent -> degrees/mm and sends to SDK. Use set_joint_positions_deg for degree inputs.
-        """
-        if not isinstance(positions, (list, tuple)) or len(positions) < 7:
-            raise ValueError("positions must be a sequence of length >=7")
-
-        # clamp and map percent [-100,100] -> angle between min_pos and max_pos
-        scaled_angles = []
-        for i in range(6):
-            p = positions[i]
-            try:
-                p = float(p)
-            except Exception:
-                p = 0.0
-            p = max(-100.0, min(100.0, p))
-            minv = self.min_pos[i]
-            maxv = self.max_pos[i]
-            angle = minv + (p + 100.0) / 200.0 * (maxv - minv)
-            scaled_angles.append(int(round(angle * 1000.0)))  # SDK expects int thousandths
-
-        # gripper percent 0..100 -> mm
-        g = positions[6]
-        try:
-            g = float(g)
-        except Exception:
-            g = 0.0
-        g = max(0.0, min(100.0, g))
-        g_mm = self.min_pos[6] + (self.max_pos[6] - self.min_pos[6]) * (g / 100.0)
-        g_int = int(round(g_mm * 10000.0))
-
-        # send to SDK
-        try:
-            self.piper.JointCtrl(*scaled_angles)
-            self.piper.GripperCtrl(g_int, 1000, 0x01, 0)
-        except Exception as e:
-            log.exception("Failed to send joint/gripper via JointCtrl/GripperCtrl: %s", e)
-            raise
-
-    # --- LeRobot-friendly helpers (degrees/mm) ---
     def get_status_deg(self) -> dict[str, float]:
         """Return joints in degrees and gripper in mm."""
         js = self.piper.GetArmJointMsgs().joint_state
@@ -125,59 +83,6 @@ class PiperSDKInterface:
         # Convert gripper back from SDK unit to mm (SDK used *10000 when sending)
         try:
             out["gripper.pos"] = g.gripper_state.grippers_angle / 10000.0
-        except Exception:
-            pass
-        return out
-
-    def set_joint_positions_deg(self, joints_deg: list[float], gripper_mm: float | None = None) -> None:
-        """Send joints in degrees and optional gripper in mm."""
-        j_ints = [int(round(d * 1000.0)) for d in joints_deg]
-        try:
-            self.piper.JointCtrl(*j_ints)
-            if gripper_mm is not None:
-                self.piper.GripperCtrl(int(round(gripper_mm * 10000.0)), 1000, 0x01, 0)
-        except Exception as e:
-            log.exception("set_joint_positions_deg failed: %s", e)
-            raise
-
-    def get_status(self) -> dict[str, Any]:
-        joint_status = self.piper.GetArmJointMsgs()
-        gripper = self.piper.GetArmGripperMsgs()
-
-        joint_state = joint_status.joint_state
-        obs_dict = {
-            "joint_0.pos": joint_state.joint_1,
-            "joint_1.pos": joint_state.joint_2,
-            "joint_2.pos": joint_state.joint_3,
-            "joint_3.pos": joint_state.joint_4,
-            "joint_4.pos": joint_state.joint_5,
-            "joint_5.pos": joint_state.joint_6,
-        }
-        obs_dict.update(
-            {
-                "joint_6.pos": gripper.gripper_state.grippers_angle,
-            }
-        )
-
-        return obs_dict
-
-    def get_action_from_ctrl(self) -> dict[str, float]:
-        """
-        Return the control commands (what the master is sending) in degrees and mm.
-        Use this for recording actions in a master-slave setup.
-        """
-        jc = self.piper.GetArmJointCtrl().joint_ctrl
-        gc = self.piper.GetArmGripperCtrl()
-        out = {
-            "joint_1.pos": jc.joint_1 / 1000.0,
-            "joint_2.pos": jc.joint_2 / 1000.0,
-            "joint_3.pos": jc.joint_3 / 1000.0,
-            "joint_4.pos": jc.joint_4 / 1000.0,
-            "joint_5.pos": jc.joint_5 / 1000.0,
-            "joint_6.pos": jc.joint_6 / 1000.0,
-        }
-        try:
-            out["gripper.pos"] = gc.gripper_ctrl.grippers_angle / 10000.0
         except Exception:
             pass
         return out
