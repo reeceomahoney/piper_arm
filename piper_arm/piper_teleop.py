@@ -77,7 +77,9 @@ class PiperTeleoperator(Teleoperator):
 
     def connect(self, calibrate: bool = True) -> None:
         if C_PiperInterface_V2 is None:
-            raise ImportError("piper_sdk is not installed. Install with `pip install piper_sdk`.")
+            raise ImportError(
+                "piper_sdk is not installed. Install with `pip install piper_sdk`."
+            )
 
         if self._piper is None:
             self._piper = C_PiperInterface_V2(self.config.can_interface)

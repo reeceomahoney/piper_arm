@@ -16,7 +16,9 @@ class Piper(Robot):
         self.config = config
         # Lazily initialize the SDK interface in connect()
         self._iface: PiperSDKInterface | None = None
-        self.cameras = make_cameras_from_configs(config.cameras) if config.cameras else {}
+        self.cameras = (
+            make_cameras_from_configs(config.cameras) if config.cameras else {}
+        )
 
     @property
     def is_connected(self) -> bool:
@@ -81,7 +83,12 @@ class Piper(Robot):
             raise RuntimeError("Piper SDK interface not available")
         min_pos = getattr(self._iface, "min_pos", None)
         max_pos = getattr(self._iface, "max_pos", None)
-        if not isinstance(min_pos, list) or not isinstance(max_pos, list) or len(min_pos) < 7 or len(max_pos) < 7:
+        if (
+            not isinstance(min_pos, list)
+            or not isinstance(max_pos, list)
+            or len(min_pos) < 7
+            or len(max_pos) < 7
+        ):
             raise RuntimeError("Piper SDK limits unavailable")
         return min_pos, max_pos
 
@@ -116,13 +123,16 @@ class Piper(Robot):
                 pct = (deg - rng_min) / (rng_max - rng_min) * 200.0 - 100.0
                 return max(-100.0, min(100.0, pct))
         else:
+
             def deg_to_pct(deg: float, idx: int) -> float:  # type: ignore[no-redef]
                 return deg
 
         obs = {}
         for i, name in enumerate(self.config.joint_names, start=1):
             deg = status[f"joint_{i}.pos"] * self.config.joint_signs[i - 1]
-            obs[f"{name}.pos"] = deg if self.config.use_degrees else deg_to_pct(deg, i - 1)
+            obs[f"{name}.pos"] = (
+                deg if self.config.use_degrees else deg_to_pct(deg, i - 1)
+            )
 
         if self.config.include_gripper and "gripper.pos" in status:
             grip_mm = status["gripper.pos"]

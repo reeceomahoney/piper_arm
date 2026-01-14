@@ -9,17 +9,24 @@ try:
     from piper_sdk import C_PiperInterface_V2
 except Exception:
     C_PiperInterface_V2 = None
-    log.debug("piper_sdk not available at import time; use `pip install piper_sdk` if you need hardware access")
+    log.debug(
+        "piper_sdk not available at import time; use `pip install piper_sdk` if you need hardware access"
+    )
 
 
 class PiperSDKInterface:
     def __init__(self, port: str = "can0", enable_timeout: float = 5.0):
         if C_PiperInterface_V2 is None:
-            raise ImportError("piper_sdk is not installed. Install with `pip install piper_sdk`.")
+            raise ImportError(
+                "piper_sdk is not installed. Install with `pip install piper_sdk`."
+            )
         try:
             self.piper = C_PiperInterface_V2(port)
         except Exception as e:
-            log.error("Failed to initialize Piper SDK: %s. Did you activate the CAN interface?", e)
+            log.error(
+                "Failed to initialize Piper SDK: %s. Did you activate the CAN interface?",
+                e,
+            )
             self.piper = None
             raise RuntimeError("Failed to initialize Piper SDK") from e
 
@@ -33,11 +40,17 @@ class PiperSDKInterface:
         # reset the arm if it's not in idle state (safe resume)
         try:
             status = self.piper.GetArmStatus().arm_status
-            log.debug("Initial arm motion_status=%s ctrl_mode=%s", getattr(status, "motion_status", None), getattr(status, "ctrl_mode", None))
+            log.debug(
+                "Initial arm motion_status=%s ctrl_mode=%s",
+                getattr(status, "motion_status", None),
+                getattr(status, "ctrl_mode", None),
+            )
             if status.motion_status != 0:
                 self.piper.EmergencyStop(0x02)  # resume
             if status.ctrl_mode == 2:
-                log.warning("Arm is in teaching mode (ctrl_mode==2). Attempting resume.")
+                log.warning(
+                    "Arm is in teaching mode (ctrl_mode==2). Attempting resume."
+                )
                 self.piper.EmergencyStop(0x02)
         except Exception as e:
             log.debug("Unable to read arm status: %s", e)
@@ -52,7 +65,9 @@ class PiperSDKInterface:
             if ok:
                 break
             if time.time() - start > enable_timeout:
-                raise TimeoutError(f"EnablePiper timed out after {enable_timeout} seconds")
+                raise TimeoutError(
+                    f"EnablePiper timed out after {enable_timeout} seconds"
+                )
             time.sleep(0.01)
 
         # Get the min and max positions for each joint and gripper
@@ -60,8 +75,14 @@ class PiperSDKInterface:
             angel_status = self.piper.GetAllMotorAngleLimitMaxSpd()
             # SDK motor list appears 1-indexed -> extract 1..6
             # Angle limits are in deci-degrees (0.1 deg). Convert to degrees for consistency.
-            self.min_pos = [pos.min_angle_limit / 10.0 for pos in angel_status.all_motor_angle_limit_max_spd.motor[1:7]] + [0.0]
-            self.max_pos = [pos.max_angle_limit / 10.0 for pos in angel_status.all_motor_angle_limit_max_spd.motor[1:7]] + [10.0]
+            self.min_pos = [
+                pos.min_angle_limit / 10.0
+                for pos in angel_status.all_motor_angle_limit_max_spd.motor[1:7]
+            ] + [0.0]
+            self.max_pos = [
+                pos.max_angle_limit / 10.0
+                for pos in angel_status.all_motor_angle_limit_max_spd.motor[1:7]
+            ] + [10.0]
         except Exception as e:
             log.warning("Could not read joint limits: %s", e)
             # sensible defaults to avoid crashes; keep lists length >=7
@@ -92,4 +113,6 @@ class PiperSDKInterface:
             # safe stop; values are SDK-specific, keep as-is but guarded
             self.piper.JointCtrl(0, 0, 0, 0, 25000, 0)
         except Exception:
-            log.debug("Disconnect: JointCtrl cleanup failed or piper already disconnected")
+            log.debug(
+                "Disconnect: JointCtrl cleanup failed or piper already disconnected"
+            )
