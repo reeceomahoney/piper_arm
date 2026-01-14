@@ -56,12 +56,6 @@ class PiperSDKInterface:
                 raise TimeoutError(f"EnablePiper timed out after {enable_timeout} seconds")
             time.sleep(0.01)
 
-        # Set motion control to joint mode at 100% speed
-        try:
-            self.piper.MotionCtrl_2(0x01, 0x01, 100, 0x00)
-        except Exception as e:
-            log.warning("MotionCtrl_2 failed: %s", e)
-
         # Get the min and max positions for each joint and gripper
         try:
             angel_status = self.piper.GetAllMotorAngleLimitMaxSpd()
