@@ -63,7 +63,7 @@ class PiperTeleoperator(Teleoperator):
         action = {
             f"joint_{i}.pos": getattr(jc, f"joint_{i}") / 1000.0 for i in range(1, 7)
         }
-        action["gripper.pos"] = (gc.gripper_ctrl.grippers_angle / 10000.0,)
+        action["gripper.pos"] = gc.gripper_ctrl.grippers_angle / 10000.0
 
         return action
 
