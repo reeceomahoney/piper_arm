@@ -92,7 +92,7 @@ class Piper(Robot):
             cam.connect()
 
     @property
-    def is_calibrated(self) -> bool:  # type: ignore[override]
+    def is_calibrated(self) -> bool:
         return True
 
     def calibrate(self) -> None:
