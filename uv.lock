@@ -1646,7 +1646,7 @@ wheels = [
 [[package]]
 name = "piper-arm"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "lerobot" },
     { name = "opencv-contrib-python" },
