@@ -1,4 +1,3 @@
-import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -6,9 +5,8 @@ from typing import Any
 from lerobot.cameras import CameraConfig, make_cameras_from_configs
 from lerobot.cameras.realsense import RealSenseCameraConfig
 from lerobot.robots import Robot, RobotConfig
+from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 from piper_sdk import C_PiperInterface_V2
-
-log = logging.getLogger(__name__)
 
 
 @RobotConfig.register_subclass("piper")
@@ -64,6 +62,7 @@ class Piper(Robot):
             cam.is_connected for cam in self.cameras.values()
         )
 
+    @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
         self.piper.ConnectPort()
         time.sleep(0.1)
@@ -101,6 +100,7 @@ class Piper(Robot):
     def configure(self) -> None:
         pass
 
+    @check_if_not_connected
     def get_observation(self) -> dict[str, Any]:
         js = self.piper.GetArmJointMsgs().joint_state
         g = self.piper.GetArmGripperMsgs()
@@ -115,10 +115,12 @@ class Piper(Robot):
 
         return obs
 
+    @check_if_not_connected
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         # Hardware handles control via master-slave CAN - just return the action
         return action
 
+    @check_if_not_connected
     def disconnect(self) -> None:
         while self.piper.DisablePiper():
             time.sleep(0.01)
