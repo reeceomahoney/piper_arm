@@ -4,9 +4,7 @@ from lerobot.configs.train import DatasetConfig, TrainPipelineConfig, WandBConfi
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.scripts.lerobot_train import train
 
-HF_USER = "reece-omahoney"
-EXP_NAME = "act-cube-pick"
-DATASET_NAME = "cube-pick-4"
+from piper_arm.config import DATASET_NAME, EXP_NAME, HF_USER
 
 
 def main():

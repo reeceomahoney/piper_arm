@@ -13,10 +13,10 @@ dependencies = [
 ]
 
 [project.scripts]
-record = "scripts.record:main"
-train = "scripts.train:main"
-play = "scripts.play:main"
-zero = "scripts.zero:main"
+record = "piper_arm.scripts.record:main"
+train = "piper_arm.scripts.train:main"
+play = "piper_arm.scripts.play:main"
+zero = "piper_arm.scripts.zero:main"
 
 [dependency-groups]
 dev = ["pre-commit>=4.5.1"]

@@ -10,7 +10,7 @@ In this setup:
 from lerobot.scripts.lerobot_record import DatasetRecordConfig, RecordConfig, record
 
 from piper_arm import PiperConfig, PiperTeleoperatorConfig
-from .train import HF_USER
+from piper_arm.config import HF_USER
 
 
 def main():
