@@ -108,7 +108,7 @@ class Piper(Robot):
         obs = {
             f"joint_{i}.pos": getattr(js, f"joint_{i}") / 1000.0 for i in range(1, 7)
         }
-        obs["gripper.pos"] = (g.gripper_state.grippers_angle / 10000.0,)
+        obs["gripper.pos"] = g.gripper_state.grippers_angle / 10000.0
 
         for cam_key, cam in self.cameras.items():
             obs[cam_key] = cam.async_read()
