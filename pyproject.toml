@@ -15,6 +15,7 @@ dependencies = [
 [project.scripts]
 record = "scripts.record:main"
 train = "scripts.train:main"
+play = "scripts.play:main"
 zero = "scripts.zero:main"
 
 [dependency-groups]

@@ -120,7 +120,7 @@ class Piper(Robot):
             joint_actions = [v for k, v in action.items() if k in self._motors_ft]
             j_ints = [int(round(j * 1000.0)) for j in joint_actions]
             gripper_mm = int(round(action["gripper.pos"] * 10000.0))
-            print("Setting joints to:", j_ints, "gripper_mm:", gripper_mm)
+
             self.piper.JointCtrl(*j_ints)
             self.piper.GripperCtrl(gripper_mm, 1000, 0x01, 0)
 
