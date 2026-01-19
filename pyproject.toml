@@ -12,5 +12,21 @@ dependencies = [
   "pyrealsense2>=2.56.5.9235; sys_platform != 'darwin'",
 ]
 
+[project.scripts]
+record = "piper_arm.scripts.record:main"
+train = "piper_arm.scripts.train:main"
+play = "piper_arm.scripts.play:main"
+zero = "piper_arm.scripts.zero:main"
+
 [dependency-groups]
 dev = ["pre-commit>=4.5.1"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
