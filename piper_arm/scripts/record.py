@@ -1,23 +1,14 @@
-"""
-Record a LeRobot dataset using Piper arms in master-slave CAN configuration.
-
-In this setup:
-- The hardware handles teleoperation (master arm controls slave arm via CAN)
-- Observations come from GetArmJointMsgs (actual joint positions)
-- Actions come from GetArmJointCtrl (control commands being sent)
-"""
-
 from lerobot.scripts.lerobot_record import DatasetRecordConfig, RecordConfig, record
 
 from piper_arm import PiperConfig, PiperTeleoperatorConfig
-from piper_arm.config import HF_USER
+from piper_arm.config import HF_USER, DATASET_NAME
 
 
 def main():
     cfg = RecordConfig(
         robot=PiperConfig(),
         dataset=DatasetRecordConfig(
-            repo_id=f"{HF_USER}/piper-arm",
+            repo_id=f"{HF_USER}/{DATASET_NAME}",
             single_task="Pick up the object",
             fps=20,
             episode_time_s=600,

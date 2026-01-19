@@ -4,14 +4,14 @@ from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.scripts.lerobot_record import DatasetRecordConfig, RecordConfig, record
 
 from piper_arm import PiperConfig
-from piper_arm.config import EXP_NAME, HF_USER
+from piper_arm.config import EXP_NAME, HF_USER, DATASET_NAME
 
 
 def main():
     cfg = RecordConfig(
         robot=PiperConfig(teleop_mode=False),
         dataset=DatasetRecordConfig(
-            repo_id=f"{HF_USER}/eval_piper-arm",
+            repo_id=f"{HF_USER}/eval_{DATASET_NAME}",
             single_task="Pick up the object",
             fps=20,
             episode_time_s=600,
