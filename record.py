@@ -30,20 +30,23 @@ def main(root: Path | None = None):
     )
 
     dataset_config = DatasetRecordConfig(
-        repo_id="reece-omahoney/piper_arm",
-        single_task="Pick up the object",
+        repo_id="reece-omahoney/cube-pick-4",
+        single_task="Cube Pick",
         root=root,
-        fps=10,
-        episode_time_s=10,
-        reset_time_s=1,
-        num_episodes=10,
+        fps=20,
+        episode_time_s=60,
+        reset_time_s=10,
+        num_episodes=50,
         video=True,
         push_to_hub=False,
-        num_image_writer_processes=1,
-        num_image_writer_threads_per_camera=2,
     )
 
-    cfg = RecordConfig(robot=robot_config, teleop=teleop_config, dataset=dataset_config)
+    cfg = RecordConfig(
+        robot=robot_config,
+        teleop=teleop_config,
+        dataset=dataset_config,
+        display_data=True,
+    )
 
     record(cfg)
 

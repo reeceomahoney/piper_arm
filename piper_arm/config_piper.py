@@ -22,7 +22,11 @@ class PiperConfig(RobotConfig):
     cameras: dict[str, CameraConfig] = field(
         default_factory=lambda: {
             "wrist": RealSenseCameraConfig(
-                serial_number_or_name="123622270993", fps=30, width=640, height=480
+                serial_number_or_name="123622270993",
+                fps=30,
+                width=640,
+                height=480,
+                use_depth=True,
             )
         }
     )
