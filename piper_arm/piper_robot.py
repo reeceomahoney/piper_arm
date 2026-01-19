@@ -72,9 +72,6 @@ class Piper(Robot):
 
         self._is_piper_connected = True
 
-        # Reset
-        self.piper.MotionCtrl_1(0x02, 0, 0)
-
         # SDK motor list appears 1-indexed -> extract 1..6
         # Angle limits are in deci-degrees (0.1 deg). Convert to degrees for consistency.
         limits = self.piper.GetAllMotorAngleLimitMaxSpd()
@@ -122,9 +119,6 @@ class Piper(Robot):
 
     @check_if_not_connected
     def disconnect(self) -> None:
-        while self.piper.DisablePiper():
-            time.sleep(0.01)
-
         self.piper.DisconnectPort()
 
         for cam in self.cameras.values():
