@@ -27,3 +27,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

@@ -4,7 +4,7 @@ from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.scripts.lerobot_record import DatasetRecordConfig, RecordConfig, record
 
 from piper_arm import PiperConfig
-from piper_arm.config import EXP_NAME, HF_USER, DATASET_NAME
+from piper_arm.config import DATASET_NAME, EXP_NAME, HF_USER
 
 
 def main():

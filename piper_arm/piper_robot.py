@@ -73,9 +73,8 @@ class Piper(Robot):
 
         self._is_piper_connected = True
 
-        # SDK motor list appears 1-indexed -> extract 1..6
-        # Angle limits are in deci-degrees (0.1 deg). Convert to degrees for consistency.
         limits = self.piper.GetAllMotorAngleLimitMaxSpd()
+        # Convert from 0.1 deg to deg
         self.min_pos = [
             pos.min_angle_limit / 10.0
             for pos in limits.all_motor_angle_limit_max_spd.motor[1:7]

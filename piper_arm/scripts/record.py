@@ -1,7 +1,7 @@
 from lerobot.scripts.lerobot_record import DatasetRecordConfig, RecordConfig, record
 
 from piper_arm import PiperConfig, PiperTeleoperatorConfig
-from piper_arm.config import HF_USER, DATASET_NAME
+from piper_arm.config import DATASET_NAME, HF_USER
 
 
 def main():
