@@ -27,6 +27,7 @@ def main():
             push_to_hub=False,
         ),
         teleop=PiperTeleoperatorConfig(),
+        display_data=True,
     )
 
     record(cfg)

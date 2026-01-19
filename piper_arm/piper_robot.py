@@ -23,6 +23,7 @@ class PiperConfig(RobotConfig):
             )
         }
     )
+    teleop_mode: bool = True
 
 
 class Piper(Robot):
@@ -114,7 +115,15 @@ class Piper(Robot):
 
     @check_if_not_connected
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
-        # Hardware handles control via master-slave CAN - just return the action
+        # In teleop mode, the hardware handles control - just return the action
+        if not self.config.teleop_mode:
+            joint_actions = [v for k, v in action.items() if k in self._motors_ft]
+            j_ints = [int(round(j * 1000.0)) for j in joint_actions]
+            gripper_mm = int(round(action["gripper.pos"] * 10000.0))
+            print("Setting joints to:", j_ints, "gripper_mm:", gripper_mm)
+            self.piper.JointCtrl(*j_ints)
+            self.piper.GripperCtrl(gripper_mm, 1000, 0x01, 0)
+
         return action
 
     @check_if_not_connected
