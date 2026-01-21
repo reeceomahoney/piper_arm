@@ -12,7 +12,7 @@ def main():
         robot=PiperConfig(teleop_mode=False),
         dataset=DatasetRecordConfig(
             repo_id=f"{HF_USER}/eval_{DATASET_NAME}",
-            single_task="Pick up the object",
+            single_task="Pick and place the cube",
             fps=20,
             episode_time_s=600,
             reset_time_s=10,
