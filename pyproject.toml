@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "lerobot[smolvla] @ git+ssh://git@github.com/huggingface/lerobot.git",
+  "lerobot[smolvla, libero] @ git+ssh://git@github.com/huggingface/lerobot.git",
   "piper-sdk>=0.6.1",
   "opencv-contrib-python>=4.12.0.88",
   "pyrealsense2-macosx>=2.54.2; sys_platform == 'darwin'",
