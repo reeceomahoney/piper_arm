@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from lerobot.policies.act.configuration_act import ACTConfig
+from lerobot.configs.train import PreTrainedConfig
 from lerobot.scripts.lerobot_record import DatasetRecordConfig, RecordConfig, record
 
 from piper_arm import PiperConfig
@@ -8,6 +8,9 @@ from piper_arm.config import DATASET_NAME, EXP_NAME, HF_USER
 
 
 def main():
+    policy_cfg = PreTrainedConfig.from_pretrained(f"{HF_USER}/{EXP_NAME}")
+    policy_cfg.pretrained_path = Path(f"{HF_USER}/{EXP_NAME}")
+
     cfg = RecordConfig(
         robot=PiperConfig(teleop_mode=False),
         dataset=DatasetRecordConfig(
@@ -20,12 +23,7 @@ def main():
             video=True,
             push_to_hub=False,
         ),
-        policy=ACTConfig(
-            pretrained_path=Path(f"{HF_USER}/{EXP_NAME}"),
-            device="cuda:0",
-            chunk_size=40,
-            n_action_steps=40,
-        ),
+        policy=policy_cfg,
     )
 
     record(cfg)

@@ -9,13 +9,13 @@ PRETRAINED_PATH = "HuggingFaceVLA/smolvla_libero"
 
 
 def main():
-    policy = PreTrainedConfig.from_pretrained(PRETRAINED_PATH)
-    policy.pretrained_path = Path(PRETRAINED_PATH)
+    policy_cfg = PreTrainedConfig.from_pretrained(PRETRAINED_PATH)
+    policy_cfg.pretrained_path = Path(PRETRAINED_PATH)
 
     cfg = EvalPipelineConfig(
         env=LiberoEnv(task="libero_object", task_ids=[0]),
         eval=EvalConfig(n_episodes=1, batch_size=1),
-        policy=policy,
+        policy=policy_cfg,
     )
 
     eval_main(cfg)
