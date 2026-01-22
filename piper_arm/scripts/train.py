@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from lerobot.configs.train import DatasetConfig, TrainPipelineConfig, WandBConfig
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.scripts.lerobot_train import train
@@ -16,7 +14,6 @@ def main():
             chunk_size=40,
             n_action_steps=40,
         ),
-        output_dir=Path("outputs/train/") / EXP_NAME,
         job_name=EXP_NAME,
         wandb=WandBConfig(enable=True),
     )
