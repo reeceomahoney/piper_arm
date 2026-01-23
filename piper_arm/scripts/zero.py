@@ -12,7 +12,9 @@ def main():
         time.sleep(0.01)
 
     piper.ModeCtrl(0x01, 0x01, 30, 0x00)
-    piper.JointCtrl(0, 0, 0, 0, 0, 0)
+    for _ in range(5):
+        piper.JointCtrl(0, 0, 0, 0, 0, 0)
+        time.sleep(0.5)
     piper.GripperCtrl(0, 1000, 0x01, 0)
 
 
