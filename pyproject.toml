@@ -5,11 +5,13 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
-  "lerobot[libero,smolvla] @ git+https://github.com/huggingface/lerobot.git",
+  "lerobot[aloha] @ git+https://github.com/huggingface/lerobot.git",
   "piper-sdk>=0.6.1",
   "opencv-contrib-python>=4.12.0.88",
   "pyrealsense2-macosx>=2.54.2; sys_platform == 'darwin'",
   "pyrealsense2>=2.56.5.9235; sys_platform != 'darwin'",
+  "matplotlib>=3.7.0",
+  "scikit-learn>=1.3.0",
 ]
 
 [project.scripts]
@@ -17,6 +19,7 @@ record = "piper_arm.scripts.record:main"
 train = "piper_arm.scripts.train:main"
 play = "piper_arm.scripts.play:main"
 zero = "piper_arm.scripts.zero:main"
+visualize-tokens = "piper_arm.scripts.visualize_tokens:main"
 
 [dependency-groups]
 dev = ["pre-commit>=4.5.1"]
