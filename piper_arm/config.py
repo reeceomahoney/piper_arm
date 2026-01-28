@@ -1,3 +1,3 @@
 HF_USER = "reece-omahoney"
-EXP_NAME = "act-cube-pick"
-DATASET_NAME = "cube-pick-4"
+EXP_NAME = "act-aloha-base"
+DATASET_NAME = "merged_aloha_dataset"
