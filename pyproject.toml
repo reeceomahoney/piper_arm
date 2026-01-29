@@ -19,7 +19,7 @@ record = "piper_arm.scripts.record:main"
 train = "piper_arm.scripts.train:main"
 play = "piper_arm.scripts.play:main"
 zero = "piper_arm.scripts.zero:main"
-visualize-tokens = "piper_arm.scripts.visualize_tokens:main"
+tsne = "piper_arm.scripts.tsne:main"
 
 [dependency-groups]
 dev = ["pre-commit>=4.5.1"]

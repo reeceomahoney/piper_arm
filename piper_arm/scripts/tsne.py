@@ -13,14 +13,14 @@ from sklearn.manifold import TSNE
 
 CONFIGS = [
     (
-        "reece-omahoney/act-aloha-insert",
-        "lerobot/aloha_sim_insertion_human",
-        "Insertion",
+        "reece-omahoney/act-aloha-transfer-cube-finetuned",
+        "lerobot/aloha_sim_transfer_cube_human",
+        "Fine-tuned",
     ),
     (
         "reece-omahoney/act-aloha-transfer-cube",
         "lerobot/aloha_sim_transfer_cube_human",
-        "Transfer Cube",
+        "From scratch",
     ),
 ]
 
@@ -91,8 +91,8 @@ def main():
             line_fn(marker="^", markerfacecolor="gray", label="Latent"),
             line_fn(marker="s", markerfacecolor="gray", label="Robot State"),
             line_fn(marker="o", markerfacecolor="gray", label="Image Patches"),
-            line_fn(marker="o", markerfacecolor="tab:blue", label="Insertion"),
-            line_fn(marker="o", markerfacecolor="tab:orange", label="Transfer Cube"),
+            line_fn(marker="o", markerfacecolor="tab:blue", label="Fine-tuned"),
+            line_fn(marker="o", markerfacecolor="tab:orange", label="From scratch"),
         ],
         loc="best",
     )
@@ -101,8 +101,8 @@ def main():
     ax.set_title("Encoder Tokens (by type)")
 
     plt.tight_layout()
-    plt.savefig("token_visualization.png", dpi=150)
-    print("\nSaved to token_visualization.png")
+    # plt.savefig("tsne.png", dpi=150)
+    print("\nSaved to tsne.png")
     plt.show()
 
 
