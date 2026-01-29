@@ -14,6 +14,4 @@ COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
   uv sync --no-install-project --link-mode=copy
 
-COPY docker/entrypoint.sh /entrypoint.sh
-ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bash"]

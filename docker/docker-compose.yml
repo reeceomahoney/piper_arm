@@ -7,6 +7,8 @@ services:
     environment:
       - TERM=${TERM}
       - PYTHONDONTWRITEBYTECODE=1
+      - WANDB_API_KEY
+      - HF_TOKEN
     deploy:
       resources:
         reservations:
@@ -20,12 +22,3 @@ services:
     volumes:
       - ../piper_arm:/work/piper_arm
       - ../outputs:/work/outputs
-    secrets:
-      - WANDB_API_KEY
-      - HF_TOKEN
-
-secrets:
-  WANDB_API_KEY:
-    environment: WANDB_API_KEY
-  HF_TOKEN:
-    environment: HF_TOKEN
