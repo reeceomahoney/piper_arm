@@ -11,5 +11,7 @@ singularity run \
   --env "TERM=${TERM},PYTHONDONTWRITEBYTECODE=1,WANDB_API_KEY=${WANDB_API_KEY},HF_TOKEN=${HF_TOKEN}" \
   --bind "${PROJECT_DIR}/piper_arm:/work/piper_arm" \
   --bind "${PROJECT_DIR}/outputs:/work/outputs" \
+  --bind "${PROJECT_DIR}/pyproj.toml:/work/pyproject.toml" \
+  --bind "${PROJECT_DIR}/uv.lock:/work/uv.lock" \
   "$IMAGE" \
   uv run train

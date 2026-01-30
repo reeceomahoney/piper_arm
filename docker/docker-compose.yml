@@ -22,3 +22,5 @@ services:
     volumes:
       - ../piper_arm:/work/piper_arm
       - ../outputs:/work/outputs
+      - ../pyproject.toml:/work/pyproject.toml
+      - ../uv.lock:/work/uv.lock
