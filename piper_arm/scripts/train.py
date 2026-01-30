@@ -8,7 +8,7 @@ from piper_arm.policies.configuration_act_resize import ACTResizeConfig
 
 def main():
     cfg = TrainPipelineConfig(
-        dataset=DatasetConfig(repo_id=f"{HF_USER}/{DATASET_NAME}"),
+        dataset=DatasetConfig(repo_id=f"{DATASET_NAME}"),
         # env=AlohaEnv(task="AlohaTransferCube-v0"),
         policy=ACTResizeConfig(repo_id=f"{HF_USER}/{EXP_NAME}", resize_size=(224, 224)),
         job_name=EXP_NAME,
