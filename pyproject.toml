@@ -18,6 +18,7 @@ dependencies = [
 record = "piper_arm.scripts.record:main"
 train = "piper_arm.scripts.train:main"
 play = "piper_arm.scripts.play:main"
+eval = "piper_arm.scripts.eval:main"
 zero = "piper_arm.scripts.zero:main"
 tsne = "piper_arm.scripts.tsne:main"
 
