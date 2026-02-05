@@ -1,4 +1,4 @@
-.PHONY: sync submit monitor logs shell clean-remote
+.PHONY: sync submit monitor logs clean-logs push
 
 REMOTE_HOST = htc
 REMOTE_PATH = ${DATA}/piper_arm
@@ -22,3 +22,7 @@ clean-logs:
 		else \
 			rm -f slurm-*.out; \
 		fi'
+
+push:
+	docker build -t reeceomahoney/piper-arm:latest -f docker/Dockerfile .
+	docker push reeceomahoney/piper-arm:latest
