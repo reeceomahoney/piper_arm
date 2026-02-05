@@ -1,4 +1,4 @@
-.PHONY: sync submit monitor logs clean-logs push
+.PHONY: sync submit list monitor logs clean-logs push
 
 REMOTE_HOST = htc
 REMOTE_PATH = ${DATA}/piper_arm
@@ -8,6 +8,9 @@ sync:
 
 submit: sync
 	ssh $(REMOTE_HOST) 'cd $(REMOTE_PATH) && sbatch bin/submit.sh'
+
+list:
+	ssh $(REMOTE_HOST) 'sinfo -N -p short -o "%.20N %.5t %.15C %.10m %.20G" | grep h100'
 
 monitor:
 	ssh $(REMOTE_HOST) 'squeue -u $$USER'
