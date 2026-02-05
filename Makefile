@@ -15,8 +15,10 @@ monitor:
 logs:
 	ssh $(REMOTE_HOST) 'tail -f $$(squeue -u $$USER -h -t R -o "%i" | xargs -I {} echo $(REMOTE_PATH)/slurm-{}.out)'
 
-shell:
-	ssh $(REMOTE_HOST)
-
-clean-remote:
-	ssh $(REMOTE_HOST) 'cd $(REMOTE_PATH) && rm -f slurm-*.out'
+clean-logs:
+	ssh $(REMOTE_HOST) 'cd $(REMOTE_PATH) && running=$$(squeue -u $$USER -h -t R -o "slurm-%i.out"); \
+		if [ -n "$$running" ]; then \
+			ls slurm-*.out 2>/dev/null | grep -vF "$$running" | xargs -r rm -f; \
+		else \
+			rm -f slurm-*.out; \
+		fi'
