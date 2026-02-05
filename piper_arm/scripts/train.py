@@ -15,7 +15,6 @@ PRETRAINED_PATH = None
 
 
 def main():
-    # os.environ["MUJOCO_GL"] = "egl"
     if torch.cuda.device_count() > 1:
         os.environ["MUJOCO_EGL_DEVICE_ID"] = "1" if DEVICE_ID == 0 else "0"
         os.environ["CUDA_VISIBLE_DEVICES"] = str(DEVICE_ID)

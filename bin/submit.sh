@@ -17,6 +17,7 @@ singularity run \
   --nv \
   --env "TERM=${TERM}" \
   --env "PYTHONDONTWRITEBYTECODE=1" \
+  --env "MUJOCO_GL=osmesa" \
   --env "WANDB_API_KEY=${WANDB_API_KEY}" \
   --env "HF_TOKEN=${HF_TOKEN}" \
   --env "UV_CACHE_DIR=/work/.cache/uv" \
