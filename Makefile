@@ -13,7 +13,7 @@ monitor:
 	ssh $(REMOTE_HOST) 'squeue -u $$USER'
 
 logs:
-	ssh $(REMOTE_HOST) 'tail -f $$(ls -t $(REMOTE_PATH)/slurm-*.out | head -1)'
+	ssh $(REMOTE_HOST) 'tail -f $$(squeue -u $$USER -h -t R -o "%i" | xargs -I {} echo $(REMOTE_PATH)/slurm-{}.out)'
 
 shell:
 	ssh $(REMOTE_HOST)

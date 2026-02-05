@@ -18,6 +18,6 @@ singularity run \
   --bind "${PROJECT_DIR}/outputs:/work/outputs" \
   --bind "${PROJECT_DIR}/pyproject.toml:/work/pyproject.toml" \
   --bind "${PROJECT_DIR}/uv.lock:/work/uv.lock" \
-  --bind "${PROJECT_DIR}/.cache:/work/.cache" \
+  --bind "${PROJECT_DIR}/../.cache:/work/.cache" \
   "$IMAGE" \
   uv run train
