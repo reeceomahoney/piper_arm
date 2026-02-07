@@ -16,16 +16,12 @@ monitor:
 	ssh $(REMOTE_HOST) 'squeue -u $$USER'
 
 logs:
-	@files=$$(ssh $(REMOTE_HOST) 'squeue -u $$USER -h -t R -o "$(REMOTE_PATH)/slurm-%i.out"'); \
-	count=$$(echo "$$files" | wc -w); \
-	if [ $$count -eq 1 ]; then \
-		ssh $(REMOTE_HOST) "tail -f $$files"; \
-	else \
-		for f in $$files; do \
-			tmux split-window -v "ssh $(REMOTE_HOST) 'tail -f $$f'"; \
-		done; \
-		tmux select-layout even-vertical; \
-	fi
+	@set -- $$(ssh $(REMOTE_HOST) 'squeue -u $$USER -h -t R -o "$(REMOTE_PATH)/slurm-%i.out"'); \
+	first=$$1; shift; \
+	for f; do \
+		tmux split-window -v "ssh $(REMOTE_HOST) 'tail -f $$f'"; \
+	done; \
+	ssh $(REMOTE_HOST) "tail -f $$first"
 
 clean-logs:
 	ssh $(REMOTE_HOST) 'cd $(REMOTE_PATH) && running=$$(squeue -u $$USER -h -t R -o "slurm-%i.out"); \

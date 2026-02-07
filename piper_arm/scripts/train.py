@@ -1,14 +1,14 @@
 import os
-from pathlib import Path
 
 import torch
+from lerobot.configs.eval import EvalConfig
 from lerobot.configs.train import DatasetConfig, TrainPipelineConfig, WandBConfig
-from lerobot.envs.configs import AlohaEnv
+from lerobot.envs.configs import AlohaEnv, LiberoEnv
 from lerobot.policies.factory import SmolVLAConfig
 from lerobot.scripts.lerobot_train import train
 
+import piper_arm.envs  # noqa: F401
 from piper_arm.config import DATASET_NAME, EXP_NAME, HF_USER
-from piper_arm.policies.configuration_act_resize import ACTResizeConfig
 
 DEVICE_ID = 0
 PRETRAINED_PATH = None
@@ -21,18 +21,20 @@ def main():
 
     cfg = TrainPipelineConfig(
         dataset=DatasetConfig(repo_id=f"{DATASET_NAME}"),
-        env=AlohaEnv(task="AlohaTransferCube-v0"),
+        # env=AlohaEnv(task="AlohaTransferCubeWithTask-v0"),
+        env=LiberoEnv("libero_object"),
         policy=SmolVLAConfig(
             repo_id=f"{HF_USER}/{EXP_NAME}",
-            pretrained_path=Path(PRETRAINED_PATH) if PRETRAINED_PATH else None,
+            n_action_steps=10,
+            load_vlm_weights=True,
         ),
         job_name=EXP_NAME,
+        eval=EvalConfig(n_episodes=10, batch_size=10),
         wandb=WandBConfig(enable=True),
         num_workers=8,
         batch_size=64,
         steps=200_000,
-        eval_freq=10_000,
-        save_freq=10_000,
+        eval_freq=5_000,
     )
 
     train(cfg)
