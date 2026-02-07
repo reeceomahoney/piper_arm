@@ -22,7 +22,7 @@ singularity run \
   --env "HF_TOKEN=${HF_TOKEN}" \
   --env "UV_CACHE_DIR=/work/.cache/uv" \
   --env "HF_HOME=/work/.cache/huggingface" \
-  --env "LIBERO_DATASET_DIR=/work/.cache/libero" \
+  --env "LIBERO_CONFIG_PATH=/work/.cache/libero" \
   --bind "${PROJECT_DIR}/piper_arm:/work/piper_arm" \
   --bind "${PROJECT_DIR}/outputs:/work/outputs" \
   --bind "${PROJECT_DIR}/pyproject.toml:/work/pyproject.toml" \
