@@ -4,13 +4,13 @@ from pathlib import Path
 import torch
 from lerobot.configs.eval import EvalConfig, EvalPipelineConfig
 from lerobot.configs.policies import PreTrainedConfig
-from lerobot.envs.configs import AlohaEnv
+from lerobot.envs.configs import LiberoEnv
 from lerobot.scripts.lerobot_eval import eval_main
 
 import piper_arm.policies.configuration_act_resize  # noqa: F401
 
 DEVICE_ID = 0
-PRETRAINED_PATH = "reece-omahoney/act-aloha-transfer-cube"
+PRETRAINED_PATH = "reece-omahoney/smolvla-libero"
 
 
 def main():
@@ -23,8 +23,8 @@ def main():
     policy_cfg.pretrained_path = Path(PRETRAINED_PATH)
 
     cfg = EvalPipelineConfig(
-        env=AlohaEnv(task="AlohaTransferCube-v0"),
-        eval=EvalConfig(n_episodes=500, batch_size=50),
+        env=LiberoEnv("libero_object"),
+        eval=EvalConfig(n_episodes=1, batch_size=1),
         policy=policy_cfg,
     )
 
