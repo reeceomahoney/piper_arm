@@ -21,6 +21,7 @@ play = "piper_arm.scripts.play:main"
 eval = "piper_arm.scripts.eval:main"
 zero = "piper_arm.scripts.zero:main"
 tsne = "piper_arm.scripts.tsne:main"
+push = "piper_arm.scripts.push_to_hub:main"
 
 [dependency-groups]
 dev = ["pre-commit>=4.5.1"]
