@@ -7,7 +7,7 @@ from lerobot.envs.configs import AlohaEnv, LiberoEnv
 from lerobot.policies.factory import SmolVLAConfig
 from lerobot.scripts.lerobot_train import train
 
-import piper_arm.envs  # noqa: F401
+# import piper_arm.envs  # noqa: F401
 from piper_arm.config import DATASET_NAME, EXP_NAME, HF_USER
 
 DEVICE_ID = 0
@@ -16,7 +16,7 @@ PRETRAINED_PATH = None
 
 def main():
     if torch.cuda.device_count() > 1:
-        os.environ["MUJOCO_EGL_DEVICE_ID"] = "1" if DEVICE_ID == 0 else "0"
+        # os.environ["MUJOCO_EGL_DEVICE_ID"] = "1" if DEVICE_ID == 0 else "0"
         os.environ["CUDA_VISIBLE_DEVICES"] = str(DEVICE_ID)
 
     cfg = TrainPipelineConfig(
@@ -29,7 +29,7 @@ def main():
             load_vlm_weights=True,
         ),
         job_name=EXP_NAME,
-        eval=EvalConfig(n_episodes=10, batch_size=10),
+        eval=EvalConfig(n_episodes=1, batch_size=1),
         wandb=WandBConfig(enable=True),
         num_workers=8,
         batch_size=64,
