@@ -1,11 +1,9 @@
-"""Train linear probes on VLM token embeddings to predict contact state.
+"""Train linear probes on VLM token embeddings.
 
 Extracts representations after 0, 4, 8, 12, and 16 layers of the VLM encoder
-from the pretrained SmolVLA model and trains a binary contact-state probe at
-each depth.
-
-  n=0  -> input token embeddings (output of embed_prefix())
-  n>0  -> hidden states after n transformer layers
+from the pretrained SmolVLA model and trains a linear probe for each target at
+each depth. Targets include contact_state (binary classification), object_pos,
+gripper_pos (3D regression), and gripper_to_obj_dist (scalar regression).
 
 Use --random_weights to run the same experiment with randomly initialized
 weights as a control baseline.
@@ -22,10 +20,11 @@ from lerobot.policies.smolvla.modeling_smolvla import (
     make_att_2d_masks,
 )
 from lerobot.utils.constants import OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS
+from prettytable import PrettyTable
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
-PRETRAINED_PATH = "reece-omahoney/smolvla-libero"
+PRETRAINED_PATH = "reece-omahoney/smolvla-libero-256"
 DATASET_REPO = "reece-omahoney/libero-affordances"
 DEVICE = "cuda"
 BATCH_SIZE = 32
@@ -33,6 +32,13 @@ EPOCHS = 50
 LR = 1e-3
 PATIENCE = 7
 LAYER_DEPTHS = [0, 4, 8, 12, 16]
+
+TARGET_CONFIG = {
+    "contact_state": {"output_dim": 1, "task": "classification"},
+    "object_pos": {"output_dim": 3, "task": "regression"},
+    "gripper_pos": {"output_dim": 3, "task": "regression"},
+    "gripper_to_obj_dist": {"output_dim": 1, "task": "regression"},
+}
 
 
 def load_policy(
@@ -43,7 +49,6 @@ def load_policy(
         print("Reinitializing all weights randomly...")
         for module in policy.modules():
             if hasattr(module, "reset_parameters"):
-                print(f"  Resetting {module.__class__.__name__}")
                 module.reset_parameters()
     policy.to(device)
     policy.eval()
@@ -98,17 +103,23 @@ def extract_all_embeddings(
     dataset: LeRobotDataset,
     device: str,
     layer_depths: list[int],
-) -> tuple[dict[int, torch.Tensor], torch.Tensor]:
-    """Extract mean-pooled embeddings at multiple layer depths in one pass."""
+    targets: list[str],
+) -> tuple[dict[int, torch.Tensor], dict[str, torch.Tensor]]:
+    """Extract mean-pooled embeddings at multiple layer depths and labels for all targets."""
     all_embeddings = {n: [] for n in layer_depths}
-    all_labels = []
+    all_labels = {t: [] for t in targets}
 
     dataloader = DataLoader(
         dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4
     )
 
     for raw_batch in tqdm(dataloader, desc="Extracting embeddings"):
-        contact_labels = raw_batch["contact_state"].squeeze(-1)
+        for t in targets:
+            t_labels = raw_batch[t]
+            if t_labels.ndim == 2 and t_labels.shape[-1] == 1:
+                t_labels = t_labels.squeeze(-1)
+            all_labels[t].append(t_labels)
+
         batch = preprocessor(raw_batch)
         batch = {
             k: v.to(device) if isinstance(v, torch.Tensor) else v
@@ -133,91 +144,113 @@ def extract_all_embeddings(
                     pooled = mean_pool(hidden, pad_masks)
                 all_embeddings[n].append(pooled.cpu())
 
-        all_labels.append(contact_labels)
-
-    labels = torch.cat(all_labels, dim=0)
+    labels_by_target = {t: torch.cat(v, dim=0) for t, v in all_labels.items()}
     embeddings = {n: torch.cat(v, dim=0) for n, v in all_embeddings.items()}
 
-    print(f"Samples: {len(labels)}, Contact rate: {labels.mean():.3f}")
+    n_samples = len(next(iter(labels_by_target.values())))
+    print(f"Samples: {n_samples}")
+    for t, labels in labels_by_target.items():
+        cfg = TARGET_CONFIG[t]
+        if cfg["task"] == "classification":
+            print(f"  {t}: positive rate {labels.mean():.3f}")
+        else:
+            print(f"  {t}: mean {labels.mean(dim=0)}, std {labels.std(dim=0)}")
     for n, e in embeddings.items():
         print(f"  n_layers={n:2d}: {e.shape}")
 
-    return embeddings, labels
+    return embeddings, labels_by_target
 
 
-class ContactProbe(nn.Module):
-    def __init__(self, input_dim: int):
+class LinearProbe(nn.Module):
+    def __init__(self, input_dim: int, output_dim: int):
         super().__init__()
-        self.linear = nn.Linear(input_dim, 1)
+        self.linear = nn.Linear(input_dim, output_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.linear(x).squeeze(-1)
+        out = self.linear(x)
+        if out.shape[-1] == 1:
+            out = out.squeeze(-1)
+        return out
 
 
 def train_probe(
     embeddings: torch.Tensor,
     labels: torch.Tensor,
     hidden_dim: int,
+    output_dim: int,
+    task: str,
     device: str,
-) -> tuple[float, float]:
-    """Train a linear probe. Returns (best_val_loss, best_val_acc)."""
+) -> float:
+    """Train a linear probe. Returns best val accuracy (classification) or MAE (regression)."""
+    is_cls = task == "classification"
+    metric_name = "acc" if is_cls else "mae"
+
     n = len(embeddings)
     perm = torch.randperm(n)
     split = int(0.8 * n)
     train_idx, val_idx = perm[:split], perm[split:]
 
-    train_ds = TensorDataset(embeddings[train_idx], labels[train_idx])
-    val_ds = TensorDataset(embeddings[val_idx], labels[val_idx])
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE)
+    train_loader = DataLoader(
+        TensorDataset(embeddings[train_idx], labels[train_idx]),
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+    )
+    val_loader = DataLoader(
+        TensorDataset(embeddings[val_idx], labels[val_idx]),
+        batch_size=BATCH_SIZE,
+    )
 
-    model = ContactProbe(hidden_dim).to(device)
+    model = LinearProbe(hidden_dim, output_dim).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.BCEWithLogitsLoss() if is_cls else nn.MSELoss()
 
-    best_val_loss = float("inf")
-    best_val_acc = 0.0
-    patience_counter = 0
+    best_val_loss, best_val_metric, patience_counter = float("inf"), 0.0, 0
 
     for epoch in range(EPOCHS):
         model.train()
-        train_loss, train_correct, train_total = 0.0, 0, 0
+        train_loss, train_metric, train_total = 0.0, 0.0, 0
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
-            logits = model(x)
-            loss = criterion(logits, y)
+            pred = model(x)
+            loss = criterion(pred, y)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             train_loss += loss.item() * len(x)
-            train_correct += ((logits > 0).float() == y).sum().item()
+            if is_cls:
+                train_metric += ((pred > 0).float() == y).sum().item()
+            else:
+                train_metric += (pred - y).abs().sum().item()
             train_total += len(x)
 
         model.eval()
-        val_loss, val_correct, val_total = 0.0, 0, 0
+        val_loss, val_metric, val_total = 0.0, 0.0, 0
         with torch.no_grad():
             for x, y in val_loader:
                 x, y = x.to(device), y.to(device)
-                logits = model(x)
-                loss = criterion(logits, y)
+                pred = model(x)
+                loss = criterion(pred, y)
                 val_loss += loss.item() * len(x)
-                val_correct += ((logits > 0).float() == y).sum().item()
+                if is_cls:
+                    val_metric += ((pred > 0).float() == y).sum().item()
+                else:
+                    val_metric += (pred - y).abs().sum().item()
                 val_total += len(x)
 
         train_loss /= train_total
         val_loss /= val_total
-        train_acc = train_correct / train_total
-        val_acc = val_correct / val_total
+        train_metric /= train_total
+        val_metric /= val_total
 
         print(
             f"  Epoch {epoch + 1:3d}/{EPOCHS} | "
-            f"Train loss: {train_loss:.4f} acc: {train_acc:.4f} | "
-            f"Val loss: {val_loss:.4f} acc: {val_acc:.4f}"
+            f"Train loss: {train_loss:.4f} {metric_name}: {train_metric:.4f} | "
+            f"Val loss: {val_loss:.4f} {metric_name}: {val_metric:.4f}"
         )
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            best_val_acc = val_acc
+            best_val_metric = val_metric
             patience_counter = 0
         else:
             patience_counter += 1
@@ -225,7 +258,7 @@ def train_probe(
                 print(f"  Early stopping at epoch {epoch + 1}")
                 break
 
-    return best_val_loss, best_val_acc
+    return best_val_metric
 
 
 def main():
@@ -238,35 +271,47 @@ def main():
     args = parser.parse_args()
 
     tag = "random" if args.random_weights else "pretrained"
-    print(f"Mode: {tag}")
+    targets = list(TARGET_CONFIG.keys())
 
     policy, preprocessor = load_policy(DEVICE, random_weights=args.random_weights)
     dataset = LeRobotDataset(DATASET_REPO)
     hidden_dim = policy.model.vlm_with_expert.config.text_config.hidden_size
 
-    embeddings_by_depth, labels = extract_all_embeddings(
-        policy, preprocessor, dataset, DEVICE, LAYER_DEPTHS
+    embeddings_by_depth, labels_by_target = extract_all_embeddings(
+        policy, preprocessor, dataset, DEVICE, LAYER_DEPTHS, targets
     )
 
     del policy
     torch.cuda.empty_cache()
 
-    results = {}
-    for n in LAYER_DEPTHS:
-        print(f"\n{'=' * 60}")
-        print(f"Training probe ({tag}): n_layers={n}")
-        print(f"{'=' * 60}")
-        best_loss, best_acc = train_probe(
-            embeddings_by_depth[n], labels, hidden_dim, DEVICE
-        )
-        results[n] = (best_loss, best_acc)
+    all_results = {}
+    for target in targets:
+        cfg = TARGET_CONFIG[target]
+        all_results[target] = {}
+        for n in LAYER_DEPTHS:
+            print(f"\n{'=' * 60}")
+            print(f"Training probe ({tag}, {target}): n_layers={n}")
+            print(f"{'=' * 60}")
+            all_results[target][n] = train_probe(
+                embeddings_by_depth[n],
+                labels_by_target[target],
+                hidden_dim,
+                cfg["output_dim"],
+                cfg["task"],
+                DEVICE,
+            )
 
-    print(f"\n{'=' * 60}")
-    print(f"Summary ({tag})")
-    print(f"{'=' * 60}")
-    print(f"{'n_layers':>10} {'val_loss':>10} {'val_acc':>10}")
-    for n, (loss, acc) in results.items():
-        print(f"{n:>10} {loss:>10.4f} {acc:>10.4f}")
+    # Print summary table
+    metric_names = {
+        t: "acc" if TARGET_CONFIG[t]["task"] == "classification" else "mae"
+        for t in targets
+    }
+    table = PrettyTable()
+    table.field_names = ["n_layers"] + [f"{t} ({metric_names[t]})" for t in targets]
+    for n in LAYER_DEPTHS:
+        table.add_row([n] + [f"{all_results[t][n]:.4f}" for t in targets])
+    print(f"\nSummary ({tag})\n")
+    print(table)
 
 
 if __name__ == "__main__":
