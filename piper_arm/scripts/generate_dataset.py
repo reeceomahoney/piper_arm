@@ -2,7 +2,8 @@
 Generate a dataset of policy rollouts in LIBERO with contact states.
 
 Rolls out a pretrained SmolVLA checkpoint in the libero_object environment,
-recording observations, actions, and gripper contact states at every frame.
+recording observations, actions, gripper contact states, and object poses
+at every frame.
 """
 
 import os
@@ -23,7 +24,7 @@ from piper_arm.config import HF_USER
 
 PRETRAINED_PATH = "reece-omahoney/smolvla-libero"
 SUITE_NAME = "libero_object"
-REPO_ID = f"{HF_USER}/libero-contact-rollouts"
+REPO_ID = f"{HF_USER}/libero-affordances"
 N_EPISODES_PER_TASK = 1
 FPS = 30
 DEVICE_ID = 0
@@ -55,6 +56,17 @@ def check_gripper_contact(env: LiberoEnv) -> bool:
     gripper = robosuite_env.robots[0].gripper
     contacts = robosuite_env.get_contacts(gripper)
     return len(contacts) > 0
+
+
+def get_object_position(env: LiberoEnv) -> np.ndarray:
+    """Get the current position of the object of interest."""
+    robosuite_env = env._env.env
+    object_name = robosuite_env.obj_of_interest[0]
+    return (
+        robosuite_env.sim.data.body_xpos[robosuite_env.obj_body_id[object_name]]
+        .copy()
+        .astype(np.float32)
+    )
 
 
 def add_batch_dim(obs: dict) -> dict:
@@ -109,6 +121,9 @@ def main():
         "next.done": {"dtype": "bool", "shape": (1,), "names": None},
         "next.success": {"dtype": "bool", "shape": (1,), "names": None},
         "contact_state": {"dtype": "float32", "shape": (1,), "names": None},
+        "object_pos": {"dtype": "float32", "shape": (3,), "names": None},
+        "gripper_pos": {"dtype": "float32", "shape": (3,), "names": None},
+        "gripper_to_obj_dist": {"dtype": "float32", "shape": (1,), "names": None},
     }
 
     dataset = LeRobotDataset.create(
@@ -173,6 +188,10 @@ def main():
                 img2 = obs["pixels"]["image2"][::-1, ::-1].copy()
                 state = flatten_state(obs)
 
+                object_pos = get_object_position(env)
+                gripper_pos = obs["robot_state"]["eef"]["pos"].astype(np.float32)
+                dist = np.linalg.norm(gripper_pos - object_pos)
+
                 frame = {
                     "task": env.task_description,
                     "observation.images.image": img1,
@@ -183,6 +202,9 @@ def main():
                     "next.done": np.array([terminated], dtype=bool),
                     "next.success": np.array([is_success], dtype=bool),
                     "contact_state": np.array([float(contact)], dtype=np.float32),
+                    "object_pos": object_pos,
+                    "gripper_pos": gripper_pos,
+                    "gripper_to_obj_dist": np.array([dist], dtype=np.float32),
                 }
                 dataset.add_frame(frame)
 
