@@ -25,8 +25,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Push a trained lerobot checkpoint to HuggingFace Hub"
     )
-    parser.add_argument("checkpoint-dir", type=Path, required=True)
-    parser.add_argument("repo-id", type=str, required=True)
+    parser.add_argument("checkpoint_dir", type=Path)
+    parser.add_argument("repo_id", type=str)
     parser.add_argument("--private", action="store_true")
     args = parser.parse_args()
 
