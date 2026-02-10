@@ -3,7 +3,7 @@ import os
 import torch
 from lerobot.configs.eval import EvalConfig
 from lerobot.configs.train import DatasetConfig, TrainPipelineConfig, WandBConfig
-from lerobot.envs.configs import AlohaEnv, LiberoEnv
+from lerobot.envs.configs import LiberoEnv
 from lerobot.policies.factory import SmolVLAConfig
 from lerobot.scripts.lerobot_train import train
 
@@ -21,16 +21,18 @@ def main():
 
     cfg = TrainPipelineConfig(
         dataset=DatasetConfig(repo_id=f"{DATASET_NAME}"),
-        # env=AlohaEnv(task="AlohaTransferCubeWithTask-v0"),
         env=LiberoEnv("libero_object"),
         policy=SmolVLAConfig(
             repo_id=f"{HF_USER}/{EXP_NAME}",
             n_action_steps=10,
             load_vlm_weights=True,
+            resize_imgs_with_padding=(256, 256),
+            max_state_dim = 8,
+            max_action_dim = 7,
         ),
         job_name=EXP_NAME,
         eval=EvalConfig(n_episodes=1, batch_size=1),
-        wandb=WandBConfig(enable=True),
+        wandb=WandBConfig(enable=True, disable_artifact=True),
         num_workers=8,
         batch_size=64,
         steps=200_000,

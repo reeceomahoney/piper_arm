@@ -10,7 +10,7 @@ from lerobot.scripts.lerobot_eval import eval_main
 import piper_arm.policies.configuration_act_resize  # noqa: F401
 
 DEVICE_ID = 0
-PRETRAINED_PATH = "reece-omahoney/smolvla-libero"
+PRETRAINED_PATH = "reece-omahoney/smolvla-libero-256"
 
 
 def main():
@@ -24,7 +24,7 @@ def main():
 
     cfg = EvalPipelineConfig(
         env=LiberoEnv("libero_object"),
-        eval=EvalConfig(n_episodes=1, batch_size=1),
+        eval=EvalConfig(n_episodes=5, batch_size=5),
         policy=policy_cfg,
     )
 
