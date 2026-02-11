@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
   "lerobot[aloha, smolvla, libero] @ git+https://github.com/huggingface/lerobot.git",
+  "lerobot_robot_piper",
+  "lerobot_teleoperator_piper",
   "piper-sdk>=0.6.1",
   "opencv-contrib-python>=4.12.0.88",
   "pyrealsense2-macosx>=2.54.2; sys_platform == 'darwin'",
@@ -16,9 +18,6 @@ dependencies = [
 ]
 
 [project.scripts]
-record = "piper_arm.scripts.record:main"
-play = "piper_arm.scripts.play:main"
-eval = "piper_arm.scripts.eval:main"
 zero = "piper_arm.scripts.zero:main"
 tsne = "piper_arm.scripts.tsne:main"
 push = "piper_arm.scripts.push_to_hub:main"
@@ -29,6 +28,10 @@ dev = ["pre-commit>=4.5.1"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+lerobot_robot_piper = { path = "lerobot_robot_piper" }
+lerobot_teleoperator_piper = { path = "lerobot_teleoperator_piper" }
 
 [tool.hatch.metadata]
 allow-direct-references = true

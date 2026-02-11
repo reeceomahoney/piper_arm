@@ -1,0 +1,15 @@
+robot:
+  type: piper
+
+teleop:
+  type: piper_teleop
+
+dataset:
+  repo_id: reece-omahoney/cube-pick-rand
+  single_task: Pick and place the cube
+  fps: 20
+  episode_time_s: 600
+  reset_time_s: 10
+  num_episodes: 50
+
+display_data: true

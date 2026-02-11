@@ -1,4 +1,4 @@
-.PHONY: sync submit list monitor logs clean-logs push train finetune eval
+.PHONY: train finetune eval record play sync submit list monitor logs clean-logs docker
 
 ############
 # Training #
@@ -16,6 +16,17 @@ finetune:
 
 eval:
 	uv run lerobot-eval --config_path configs/eval.yaml \
+		--policy.path=reece-omahoney/smolvla-libero-256
+
+############
+# Hardware #
+############
+
+record:
+	uv run lerobot-record --config_path configs/record.yaml
+
+play:
+	uv run lerobot-record --config_path configs/play.yaml \
 		--policy.path=reece-omahoney/smolvla-libero-256
 
 #########
@@ -57,6 +68,6 @@ clean-logs:
 # Docker #
 ##########
 
-push:
+docker:
 	docker build -t reeceomahoney/piper-arm:latest -f docker/Dockerfile .
 	docker push reeceomahoney/piper-arm:latest

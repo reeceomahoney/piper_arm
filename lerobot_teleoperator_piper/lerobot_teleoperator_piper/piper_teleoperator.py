@@ -1,19 +1,11 @@
 import time
-from dataclasses import dataclass, field
 from typing import Any
 
-from lerobot.teleoperators import Teleoperator, TeleoperatorConfig
+from lerobot.teleoperators import Teleoperator
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 from piper_sdk import C_PiperInterface_V2
 
-
-@TeleoperatorConfig.register_subclass("piper_teleop")
-@dataclass
-class PiperTeleoperatorConfig(TeleoperatorConfig):
-    can_interface: str = "can0"
-    joint_names: list[str] = field(
-        default_factory=lambda: [f"joint_{i + 1}" for i in range(6)]
-    )
+from .config_piper_teleoperator import PiperTeleoperatorConfig
 
 
 class PiperTeleoperator(Teleoperator):

@@ -1,0 +1,12 @@
+robot:
+  type: piper
+  teleop_mode: false
+
+dataset:
+  repo_id: reece-omahoney/eval_cube-pick-rand
+  single_task: Pick and place the cube
+  fps: 20
+  episode_time_s: 600
+  reset_time_s: 10
+  num_episodes: 50
+  push_to_hub: false
