@@ -34,3 +34,6 @@ clean-logs:
 push:
 	docker build -t reeceomahoney/piper-arm:latest -f docker/Dockerfile .
 	docker push reeceomahoney/piper-arm:latest
+
+train:
+	uv run lerobot-train --config_path configs/train.yaml

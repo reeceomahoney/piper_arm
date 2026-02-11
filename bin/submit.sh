@@ -30,4 +30,4 @@ singularity run \
   --bind "${PROJECT_DIR}/uv.lock:/work/uv.lock" \
   --bind "${PROJECT_DIR}/../.cache:/work/.cache" \
   "$IMAGE" \
-  uv run train
+  make train

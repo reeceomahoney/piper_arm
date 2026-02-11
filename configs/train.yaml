@@ -1,0 +1,29 @@
+job_name: smolvla-libero-256
+num_workers: 8
+batch_size: 64
+steps: 200000
+eval_freq: 5000
+
+dataset:
+  repo_id: reece-omahoney/libero
+
+env:
+  type: libero
+  task: libero_object
+
+policy:
+  type: smolvla
+  repo_id: reece-omahoney/foobar
+  n_action_steps: 10
+  load_vlm_weights: true
+  resize_imgs_with_padding: [256, 256]
+  max_state_dim: 8
+  max_action_dim: 7
+
+eval:
+  n_episodes: 1
+  batch_size: 1
+
+wandb:
+  enable: true
+  disable_artifact: true
