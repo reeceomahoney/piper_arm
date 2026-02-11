@@ -1,4 +1,7 @@
-"""Download lerobot/libero, compute missing image stats, and re-upload to reeceomahoney/libero."""
+"""Download lerobot/libero, compute missing image stats.
+
+Re-upload to reeceomahoney/libero.
+"""
 
 import numpy as np
 import torch

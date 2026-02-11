@@ -20,8 +20,7 @@ from lerobot.envs.utils import preprocess_observation
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.utils.constants import ACTION
 
-from piper_arm.config import HF_USER
-
+HF_USER = "reece-omahoney"
 PRETRAINED_PATH = "reece-omahoney/smolvla-libero"
 SUITE_NAME = "libero_object"
 REPO_ID = f"{HF_USER}/libero-affordances"

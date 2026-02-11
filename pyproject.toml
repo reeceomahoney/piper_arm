@@ -17,11 +17,6 @@ dependencies = [
   "prettytable>=3.17.0",
 ]
 
-[project.scripts]
-zero = "piper_arm.scripts.zero:main"
-tsne = "piper_arm.scripts.tsne:main"
-push = "piper_arm.scripts.push_to_hub:main"
-
 [dependency-groups]
 dev = ["pre-commit>=4.5.1"]
 

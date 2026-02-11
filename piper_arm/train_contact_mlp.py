@@ -107,7 +107,10 @@ def extract_all_embeddings(
     layer_depths: list[int],
     targets: list[str],
 ) -> tuple[dict[int, torch.Tensor], dict[str, torch.Tensor]]:
-    """Extract mean-pooled embeddings at multiple layer depths and labels for all targets."""
+    """Extract mean-pooled embeddings at multiple layer depths.
+
+    Returns labels for all targets.
+    """
     all_embeddings = {n: [] for n in layer_depths}
     all_labels = {t: [] for t in targets}
 
@@ -183,7 +186,10 @@ def train_probe(
     task: str,
     device: str,
 ) -> float:
-    """Train a linear probe. Returns best val accuracy (classification) or MAE (regression)."""
+    """Train a linear probe.
+
+    Returns best val accuracy (classification) or MAE (regression).
+    """
     is_cls = task == "classification"
     metric_name = "acc" if is_cls else "mae"
 
