@@ -24,6 +24,7 @@ singularity run \
   --env "HF_HOME=/work/.cache/huggingface" \
   --env "LIBERO_CONFIG_PATH=/work/.cache/libero" \
   --env "WANDB_CACHE_DIR=/work/.cache/wandb" \
+  --env "UV_LINK_MODE=copy" \
   --bind "${PROJECT_DIR}/piper_arm:/work/piper_arm" \
   --bind "${PROJECT_DIR}/outputs:/work/outputs" \
   --bind "${PROJECT_DIR}/pyproject.toml:/work/pyproject.toml" \
