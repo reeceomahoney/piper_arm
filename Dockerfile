@@ -12,6 +12,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 WORKDIR /work
 
 COPY pyproject.toml uv.lock README.md ./
+COPY lerobot_robot_piper/pyproject.toml lerobot_robot_piper/
+COPY lerobot_teleoperator_piper/pyproject.toml lerobot_teleoperator_piper/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
   uv sync --no-install-project --link-mode=copy
