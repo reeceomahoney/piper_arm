@@ -1,8 +1,8 @@
 job_name: smolvla-libero-256
 num_workers: 8
 batch_size: 64
-steps: 200000
-eval_freq: 5000
+steps: 100_000
+eval_freq: 10_000
 
 dataset:
   repo_id: reece-omahoney/libero
