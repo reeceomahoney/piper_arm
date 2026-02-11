@@ -44,12 +44,14 @@ TARGET_CONFIG = {
 def load_policy(
     device: str, random_weights: bool = False
 ) -> tuple[SmolVLAPolicy, callable]:
-    policy = SmolVLAPolicy.from_pretrained(PRETRAINED_PATH)
     if random_weights:
-        print("Reinitializing all weights randomly...")
-        for module in policy.modules():
-            if hasattr(module, "reset_parameters"):
-                module.reset_parameters()
+        pretrained = SmolVLAPolicy.from_pretrained(PRETRAINED_PATH)
+        config = pretrained.config
+        config.load_vlm_weights = False
+        policy = SmolVLAPolicy(config)
+        del pretrained
+    else:
+        policy = SmolVLAPolicy.from_pretrained(PRETRAINED_PATH)
     policy.to(device)
     policy.eval()
     preprocessor, _ = make_pre_post_processors(
