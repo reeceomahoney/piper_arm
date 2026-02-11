@@ -48,6 +48,9 @@ list:
 monitor:
 	ssh $(REMOTE_HOST) 'squeue -u $$USER'
 
+cancel:
+	ssh $(REMOTE_HOST) 'scancel -u $$USER'
+
 logs:
 	@set -- $$(ssh $(REMOTE_HOST) 'squeue -u $$USER -h -t R -o "$(REMOTE_PATH)/slurm-%i.out"'); \
 	first=$$1; shift; \

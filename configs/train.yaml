@@ -9,12 +9,12 @@ dataset:
 
 env:
   type: libero
-  task: libero_object
+  task: libero_10
 
 # these are overriden when finetuning
 policy:
   type: smolvla
-  repo_id: reece-omahoney/foobar
+  repo_id: reece-omahoney/smolvla-libero-256
   device: cuda
   n_action_steps: 10
   load_vlm_weights: true
