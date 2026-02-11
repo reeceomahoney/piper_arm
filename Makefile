@@ -69,5 +69,5 @@ clean-logs:
 ##########
 
 docker:
-	docker build -t reeceomahoney/piper-arm:latest -f docker/Dockerfile .
+	docker build -t reeceomahoney/piper-arm:latest .
 	docker push reeceomahoney/piper-arm:latest
