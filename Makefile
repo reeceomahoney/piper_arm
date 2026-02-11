@@ -1,4 +1,4 @@
-.PHONY: sync submit list monitor logs clean-logs push
+.PHONY: sync submit list monitor logs clean-logs push train finetune eval
 
 REMOTE_HOST = htc
 REMOTE_PATH = ${DATA}/piper_arm
@@ -37,3 +37,14 @@ push:
 
 train:
 	uv run lerobot-train --config_path configs/train.yaml
+
+finetune:
+	uv run lerobot-train --config_path configs/train.yaml \
+		--policy.path=lerobot/smolvla_base \
+		--policy.repo_id=reece-omahoney/foobar \
+		--policy.device=cuda \
+		--policy.n_action_steps=10
+
+eval:
+	uv run lerobot-eval --config_path configs/eval.yaml \
+		--policy.path=reece-omahoney/smolvla-libero-256

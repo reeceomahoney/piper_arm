@@ -1,0 +1,10 @@
+# policy args need to be passed via cli
+
+env:
+  type: libero
+  task: libero_object
+
+eval:
+  n_episodes: 1
+  batch_size: 1
+
