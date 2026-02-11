@@ -1,5 +1,27 @@
 .PHONY: sync submit list monitor logs clean-logs push train finetune eval
 
+############
+# Training #
+############
+
+train:
+	uv run lerobot-train --config_path configs/train.yaml
+
+finetune:
+	uv run lerobot-train --config_path configs/train.yaml \
+		--policy.path=lerobot/smolvla_base \
+		--policy.repo_id=reece-omahoney/foobar \
+		--policy.device=cuda \
+		--policy.n_action_steps=10
+
+eval:
+	uv run lerobot-eval --config_path configs/eval.yaml \
+		--policy.path=reece-omahoney/smolvla-libero-256
+
+#########
+# SLURM #
+#########
+
 REMOTE_HOST = htc
 REMOTE_PATH = ${DATA}/piper_arm
 
@@ -31,20 +53,10 @@ clean-logs:
 			rm -f slurm-*.out; \
 		fi'
 
+##########
+# Docker #
+##########
+
 push:
 	docker build -t reeceomahoney/piper-arm:latest -f docker/Dockerfile .
 	docker push reeceomahoney/piper-arm:latest
-
-train:
-	uv run lerobot-train --config_path configs/train.yaml
-
-finetune:
-	uv run lerobot-train --config_path configs/train.yaml \
-		--policy.path=lerobot/smolvla_base \
-		--policy.repo_id=reece-omahoney/foobar \
-		--policy.device=cuda \
-		--policy.n_action_steps=10
-
-eval:
-	uv run lerobot-eval --config_path configs/eval.yaml \
-		--policy.path=reece-omahoney/smolvla-libero-256
