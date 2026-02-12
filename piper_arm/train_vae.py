@@ -1,16 +1,17 @@
-"""Train an image VAE using SmolVLM's frozen SigLIP vision encoder.
+"""Train an image VAE using SmolVLM's frozen SigLIP vision encoder + connector.
 
-The VAE uses the SigLIP vision encoder from a pretrained SmolVLM model to encode
-images into patch tokens. Small LLaMA-style transformers serve as the VAE encoder
-and decoder, with a CNN pixel decoder reconstructing raw pixels at 256x256.
+The VAE uses the SigLIP vision encoder and connector from a pretrained SmolVLM
+model to encode images into patch tokens. Small LLaMA-style transformers serve as
+the VAE encoder and decoder, with a CNN pixel decoder reconstructing raw pixels.
 
 Architecture:
     Image (3,256,256) → normalize [-1,1]
     → Frozen SigLIP → (B, 256, vision_dim)  [256 patches, 16×16 grid]
+    → Frozen Connector → (B, 64, connector_dim)  [64 tokens, 8×8 grid]
     → VAE Encoder (6-layer transformer) → mu, logvar → z
-    → VAE Decoder (6-layer transformer) → (B, 256, hidden_dim)
-    → Reshape to (B, C, 16, 16)
-    → CNN Pixel Decoder (4× upsample) → (B, 3, 256, 256)
+    → VAE Decoder (6-layer transformer) → (B, 64, hidden_dim)
+    → Reshape to (B, C, 8, 8)
+    → CNN Pixel Decoder (5× upsample) → (B, 3, 256, 256)
 
 Usage:
     python train_vae.py --repo-id reece-omahoney/libero --epochs 50
@@ -108,20 +109,21 @@ class ImageVAE(L.LightningModule):
     def __init__(
         self,
         vision_model: nn.Module,
-        vision_dim: int,
+        connector: nn.Module,
+        connector_dim: int,
         camera_key: str = "observation.images.image",
         latent_dim: int = 256,
         hidden_dim: int = 512,
         n_heads: int = 8,
         intermediate_size: int = 1376,
         n_layers: int = 6,
-        n_tokens: int = 256,
+        n_tokens: int = 64,
         kl_weight: float = 1e-4,
         lr: float = 1e-4,
         weight_decay: float = 1e-5,
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=["vision_model"])
+        self.save_hyperparameters(ignore=["vision_model", "connector"])
         self.latent_dim = latent_dim
         self.hidden_dim = hidden_dim
         self.n_tokens = n_tokens
@@ -130,14 +132,16 @@ class ImageVAE(L.LightningModule):
         self.lr = lr
         self.weight_decay = weight_decay
 
-        # Frozen pretrained vision encoder
+        # Frozen pretrained components
         self.vision_model = vision_model
-        self.vision_model.eval()
-        for p in self.vision_model.parameters():
-            p.requires_grad = False
+        self.connector = connector
+        for module in [self.vision_model, self.connector]:
+            module.eval()
+            for p in module.parameters():
+                p.requires_grad = False
 
         # ── Encoder ──
-        self.enc_proj = nn.Linear(vision_dim, hidden_dim)
+        self.enc_proj = nn.Linear(connector_dim, hidden_dim)
         self.cls_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
         self.encoder = TransformerStack(
             seq_len=n_tokens + 1,  # +1 for CLS
@@ -161,9 +165,9 @@ class ImageVAE(L.LightningModule):
         )
 
         # ── CNN Pixel Decoder ──
-        # Reshape decoder output: (B, n_tokens, hidden_dim) → (B, hidden_dim, 16, 16)
-        # Then 4× ConvTranspose2d (2× upsample each): 16→32→64→128→256
-        cnn_channels = [hidden_dim, 256, 128, 64, 3]
+        # Reshape decoder output: (B, n_tokens, hidden_dim) → (B, hidden_dim, 8, 8)
+        # Then 5× ConvTranspose2d (2× upsample each): 8→16→32→64→128→256
+        cnn_channels = [hidden_dim, 256, 128, 64, 32, 3]
         cnn_layers = []
         for i in range(len(cnn_channels) - 1):
             cnn_layers.append(
@@ -182,11 +186,12 @@ class ImageVAE(L.LightningModule):
 
     @torch.no_grad()
     def encode_image(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        """Run frozen vision encoder. Input: (B, 3, 256, 256) normalized to [-1,1]."""
+        """Run frozen vision encoder + connector."""
         embed_type = self.vision_model.embeddings.patch_embedding.weight.dtype
-        return self.vision_model(
+        hidden = self.vision_model(
             pixel_values=pixel_values.to(dtype=embed_type)
-        ).last_hidden_state.float()
+        ).last_hidden_state
+        return self.connector(hidden).float()
 
     def encode(self, tokens: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """VAE encoder: patch tokens → mu, logvar."""
@@ -261,6 +266,7 @@ class ImageVAE(L.LightningModule):
     def train(self, mode=True):
         super().train(mode)
         self.vision_model.eval()
+        self.connector.eval()
         return self
 
 
@@ -284,19 +290,21 @@ def main():
     parser.add_argument("--num-workers", type=int, default=8)
     args = parser.parse_args()
 
-    # ── Load frozen vision encoder ──
+    # ── Load frozen vision encoder + connector ──
     VLM_MODEL = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
     print(f"Loading VLM: {VLM_MODEL}")
     vlm = AutoModelForImageTextToText.from_pretrained(VLM_MODEL, dtype=torch.bfloat16)
     vision_model = vlm.model.vision_model
-    vision_dim = vlm.config.vision_config.hidden_size
+    connector = vlm.model.connector
+    connector_dim = vlm.config.text_config.hidden_size
     del vlm
-    print(f"Vision encoder dim: {vision_dim}")
+    print(f"Connector output dim: {connector_dim}")
 
     # ── Model ──
     model = ImageVAE(
         vision_model=vision_model,
-        vision_dim=vision_dim,
+        connector=connector,
+        connector_dim=connector_dim,
         camera_key=args.camera_key,
         latent_dim=args.latent_dim,
         kl_weight=args.kl_weight,
