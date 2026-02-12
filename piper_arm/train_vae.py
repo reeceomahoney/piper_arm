@@ -13,7 +13,7 @@ Architecture:
     → CNN Pixel Decoder (4× upsample) → (B, 3, 256, 256)
 
 Usage:
-    python train_vae.py --repo-id reece-omahoney/libero --epochs 50 --wandb
+    python train_vae.py --repo-id reece-omahoney/libero --epochs 50
 """
 
 import argparse
@@ -125,6 +125,10 @@ class ImageVAE(L.LightningModule):
         self.latent_dim = latent_dim
         self.hidden_dim = hidden_dim
         self.n_tokens = n_tokens
+        self.camera_key = camera_key
+        self.kl_weight = kl_weight
+        self.lr = lr
+        self.weight_decay = weight_decay
 
         # Frozen pretrained vision encoder
         self.vision_model = vision_model
@@ -179,10 +183,9 @@ class ImageVAE(L.LightningModule):
     @torch.no_grad()
     def encode_image(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """Run frozen vision encoder. Input: (B, 3, 256, 256) normalized to [-1,1]."""
+        embed_type = self.vision_model.embeddings.patch_embedding.weight.dtype
         return self.vision_model(
-            pixel_values=pixel_values.to(
-                dtype=self.vision_model.embeddings.patch_embedding.weight.dtype
-            ),
+            pixel_values=pixel_values.to(dtype=embed_type)
         ).last_hidden_state.float()
 
     def encode(self, tokens: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -223,14 +226,14 @@ class ImageVAE(L.LightningModule):
         return recon, mu, logvar
 
     def training_step(self, batch, batch_idx):
-        images = batch[self.hparams.camera_key]
+        images = batch[self.camera_key]
         targets = images
         pixel_values = (images - 0.5) / 0.5
 
         recon, mu, logvar = self(pixel_values)
         recon_loss = F.mse_loss(recon, targets)
         kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-        loss = recon_loss + self.hparams.kl_weight * kl_loss
+        loss = recon_loss + self.kl_weight * kl_loss
 
         self.log_dict(
             {
@@ -244,8 +247,8 @@ class ImageVAE(L.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, self.parameters()),
-            lr=self.hparams.lr,
-            weight_decay=self.hparams.weight_decay,
+            lr=self.lr,
+            weight_decay=self.weight_decay,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=self.trainer.estimated_stepping_batches
