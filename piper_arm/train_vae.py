@@ -7,11 +7,11 @@ the VAE encoder and decoder, with a CNN pixel decoder reconstructing raw pixels.
 Architecture:
     Image (3,256,256) → normalize [-1,1]
     → Frozen SigLIP → (B, 256, vision_dim)  [256 patches, 16×16 grid]
-    → Frozen Connector → (B, 64, connector_dim)  [64 tokens, 8×8 grid]
+    → Frozen Connector → (B, 16, connector_dim)  [16 tokens, 4×4 grid]
     → VAE Encoder (6-layer transformer) → mu, logvar → z
-    → VAE Decoder (6-layer transformer) → (B, 64, hidden_dim)
-    → Reshape to (B, C, 8, 8)
-    → CNN Pixel Decoder (5× upsample) → (B, 3, 256, 256)
+    → VAE Decoder (6-layer transformer) → (B, 16, hidden_dim)
+    → Reshape to (B, C, 4, 4)
+    → CNN Pixel Decoder (6× upsample) → (B, 3, 256, 256)
 
 Usage:
     python train_vae.py --repo-id reece-omahoney/libero --epochs 50
@@ -117,7 +117,7 @@ class ImageVAE(L.LightningModule):
         n_heads: int = 8,
         intermediate_size: int = 1376,
         n_layers: int = 6,
-        n_tokens: int = 64,
+        n_tokens: int = 16,
         kl_weight: float = 1e-4,
         lr: float = 1e-4,
         weight_decay: float = 1e-5,
@@ -165,9 +165,9 @@ class ImageVAE(L.LightningModule):
         )
 
         # ── CNN Pixel Decoder ──
-        # Reshape decoder output: (B, n_tokens, hidden_dim) → (B, hidden_dim, 8, 8)
-        # Then 5× ConvTranspose2d (2× upsample each): 8→16→32→64→128→256
-        cnn_channels = [hidden_dim, 256, 128, 64, 32, 3]
+        # Reshape decoder output: (B, n_tokens, hidden_dim) → (B, hidden_dim, 4, 4)
+        # Then 6× ConvTranspose2d (2× each): 4→8→16→32→64→128→256
+        cnn_channels = [hidden_dim, 256, 256, 128, 64, 32, 3]
         cnn_layers = []
         for i in range(len(cnn_channels) - 1):
             cnn_layers.append(
