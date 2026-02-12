@@ -1,10 +1,19 @@
-.PHONY: train finetune eval record play sync submit list monitor logs clean-logs docker
+.PHONY: train finetune eval record play sync submit list monitor logs clean-logs docker fix-metaworld
+
+METAWORLD_CFG := $(shell uv run python -c "from pathlib import Path; import lerobot; print(Path(lerobot.__file__).parent / 'envs' / 'metaworld_config.json')")
+
+fix-metaworld:
+	@test -f $(METAWORLD_CFG) || { \
+		echo "Patching missing metaworld_config.json..."; \
+		curl -sfL -o $(METAWORLD_CFG) \
+			https://raw.githubusercontent.com/huggingface/lerobot/main/src/lerobot/envs/metaworld_config.json; \
+	}
 
 ############
 # Training #
 ############
 
-train:
+train: fix-metaworld
 	uv run lerobot-train --config_path configs/train.yaml
 
 finetune:
