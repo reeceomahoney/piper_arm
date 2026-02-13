@@ -98,6 +98,50 @@ def compute_vae_metrics(vae: ActionChunkVAE, batch: dict) -> dict:
     }
 
 
+def plot_vae_stats(results: list[dict], output_dir: Path):
+    """Plot per-timestep VAE metrics for each episode."""
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
+
+    metric_keys = [
+        ("recon_loss", "Recon Loss (MSE)"),
+        ("kl_loss", "KL Divergence"),
+        ("elbo", "ELBO"),
+    ]
+
+    for record in results:
+        steps = [t["step"] for t in record["timesteps"]]
+        color = "#2ecc71" if record["success"] else "#e74c3c"
+        label = f"T{record['task_id']} E{record['episode']}" + (
+            " \u2713" if record["success"] else " \u2717"
+        )
+        for ax, (key, _) in zip(axes, metric_keys):
+            vals = [t[key] for t in record["timesteps"]]
+            ax.plot(steps, vals, color=color, alpha=0.7, label=label)
+
+    for ax, (_, title) in zip(axes, metric_keys):
+        ax.set_ylabel(title)
+        ax.grid(True, alpha=0.3)
+
+    from matplotlib.lines import Line2D
+
+    handles = [
+        Line2D([0], [0], color="#2ecc71", label="Success"),
+        Line2D([0], [0], color="#e74c3c", label="Failure"),
+    ]
+    axes[0].legend(handles=handles, fontsize=8)
+
+    axes[-1].set_xlabel("Timestep")
+    fig.suptitle("Per-Timestep Action-Chunk VAE Metrics")
+    fig.tight_layout()
+
+    plot_path = output_dir / "eval_vae_stats.png"
+    fig.savefig(plot_path, dpi=150)
+    print(f"Plot saved to {plot_path}")
+    plt.show()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Policy rollout with per-timestep action-chunk VAE likelihood"
@@ -269,50 +313,6 @@ def main():
 
     # Plot per-timestep VAE stats
     plot_vae_stats(results, output_dir)
-
-
-def plot_vae_stats(results: list[dict], output_dir: Path):
-    """Plot per-timestep VAE metrics for each episode."""
-    import matplotlib.pyplot as plt
-
-    fig, axes = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
-
-    metric_keys = [
-        ("recon_loss", "Recon Loss (MSE)"),
-        ("kl_loss", "KL Divergence"),
-        ("elbo", "ELBO"),
-    ]
-
-    for record in results:
-        steps = [t["step"] for t in record["timesteps"]]
-        color = "#2ecc71" if record["success"] else "#e74c3c"
-        label = f"T{record['task_id']} E{record['episode']}" + (
-            " \u2713" if record["success"] else " \u2717"
-        )
-        for ax, (key, _) in zip(axes, metric_keys):
-            vals = [t[key] for t in record["timesteps"]]
-            ax.plot(steps, vals, color=color, alpha=0.7, label=label)
-
-    for ax, (_, title) in zip(axes, metric_keys):
-        ax.set_ylabel(title)
-        ax.grid(True, alpha=0.3)
-
-    from matplotlib.lines import Line2D
-
-    handles = [
-        Line2D([0], [0], color="#2ecc71", label="Success"),
-        Line2D([0], [0], color="#e74c3c", label="Failure"),
-    ]
-    axes[0].legend(handles=handles, fontsize=8)
-
-    axes[-1].set_xlabel("Timestep")
-    fig.suptitle("Per-Timestep Action-Chunk VAE Metrics")
-    fig.tight_layout()
-
-    plot_path = output_dir / "eval_vae_stats.png"
-    fig.savefig(plot_path, dpi=150)
-    print(f"Plot saved to {plot_path}")
-    plt.show()
 
 
 if __name__ == "__main__":
