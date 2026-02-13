@@ -22,9 +22,8 @@ import torch
 import torch.nn.functional as F
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.envs.configs import LiberoEnv as LiberoEnvConfig
-from lerobot.envs.factory import make_env_pre_post_processors
-from lerobot.envs.libero import TASK_SUITE_MAX_STEPS, LiberoEnv, _get_suite
-from lerobot.envs.utils import preprocess_observation
+from lerobot.envs.factory import make_env, make_env_pre_post_processors
+from lerobot.envs.utils import add_envs_task, preprocess_observation
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from lerobot.policies.utils import populate_queues
@@ -58,19 +57,6 @@ def select_action_with_chunk(
 
     action = policy._queues[ACTION].popleft()
     return action, action_chunk
-
-
-def add_batch_dim(obs: dict) -> dict:
-    """Recursively add a leading batch dimension to all numpy arrays."""
-    result = {}
-    for k, v in obs.items():
-        if isinstance(v, dict):
-            result[k] = add_batch_dim(v)
-        elif isinstance(v, np.ndarray):
-            result[k] = v[np.newaxis]
-        else:
-            result[k] = v
-    return result
 
 
 @torch.no_grad()
@@ -185,11 +171,8 @@ def main():
         args.vae_checkpoint, policy=policy, map_location=device
     ).eval()
 
-    # ── Setup ──
-    suite = _get_suite(suite_name)
-    n_tasks = len(suite.tasks)
-    max_steps = TASK_SUITE_MAX_STEPS.get(suite_name, 280)
-    task_ids = list(range(n_tasks))
+    # ── Create environments via make_env ──
+    envs = make_env(env_cfg, n_envs=args.n_episodes)
 
     timestamp = datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
     output_dir = Path(f"outputs/eval_action_vae/{timestamp}")
@@ -197,47 +180,39 @@ def main():
 
     results = []
 
-    for task_id in task_ids:
-        task = suite.get_task(task_id)
-        print(f"\n=== Task {task_id}/{n_tasks}: {task.language} ===")
+    for task_id, vec_env in envs[suite_name].items():
+        task_desc = vec_env.call("task_description")[0]
+        n_tasks = len(envs[suite_name])
+        print(f"\n=== Task {task_id}/{n_tasks}: {task_desc} ===")
 
-        env = LiberoEnv(
-            task_suite=suite,
-            task_id=task_id,
-            task_suite_name=suite_name,
-            obs_type="pixels_agent_pos",
-            camera_name="agentview_image,robot0_eye_in_hand_image",
-            init_states=True,
-            episode_index=0,
-            control_mode="relative",
-        )
+        max_steps = vec_env.call("_max_episode_steps")[0]
 
         for ep in range(args.n_episodes):
-            env.init_state_id = ep
-            obs, info = env.reset()
+            observation, info = vec_env.reset(seed=[ep])
             policy.reset()
             is_success = False
             timestep_metrics = []
+            done = np.array([False] * vec_env.num_envs)
 
             for step in range(max_steps):
-                # Process observation for policy
-                batched_obs = add_batch_dim(obs)
-                policy_obs = preprocess_observation(batched_obs)
+                if np.all(done):
+                    break
 
-                # Run policy
-                policy_obs["task"] = [env.task_description]
-                policy_obs = env_preprocessor(policy_obs)
+                # Numpy arrays → tensors with LeRobot keys
+                observation = preprocess_observation(observation)
+                observation = add_envs_task(vec_env, observation)
+                observation = env_preprocessor(observation)
 
                 # Save pre-normalized obs for VAE (which has its own preprocessor)
                 vae_obs = {
                     k: v.clone().to(device) if isinstance(v, torch.Tensor) else v
-                    for k, v in policy_obs.items()
+                    for k, v in observation.items()
                 }
 
-                policy_obs = preprocessor(policy_obs)
+                observation = preprocessor(observation)
 
                 with torch.inference_mode():
-                    action, action_chunk = select_action_with_chunk(policy, policy_obs)
+                    action, action_chunk = select_action_with_chunk(policy, observation)
 
                 # On forward-pass steps, score the full action chunk with the VAE
                 if action_chunk is not None:
@@ -257,17 +232,17 @@ def main():
 
                 action_transition = {ACTION: action}
                 action_transition = env_postprocessor(action_transition)
-                action_np = action_transition[ACTION].squeeze(0).cpu().numpy()
+                action_np = action_transition[ACTION].to("cpu").numpy()
 
-                # Step env
-                raw_obs, reward, done, step_info = env._env.step(action_np)
-                is_success = env._env.check_success()
-                terminated = done or is_success
+                observation, reward, terminated, truncated, info = vec_env.step(
+                    action_np
+                )
 
-                if terminated:
-                    break
+                if "final_info" in info:
+                    successes = info["final_info"]["is_success"].tolist()
+                    is_success = any(successes)
 
-                obs = env._format_raw_obs(raw_obs)
+                done = terminated | truncated | done
 
             # Episode summary
             if timestep_metrics:
@@ -279,7 +254,7 @@ def main():
 
             episode_record = {
                 "task_id": task_id,
-                "task_description": task.language,
+                "task_description": task_desc,
                 "episode": ep,
                 "n_steps": step + 1,
                 "success": bool(is_success),
@@ -296,7 +271,7 @@ def main():
                 f"mean_elbo={mean_elbo:.6f}"
             )
 
-        env.close()
+        vec_env.close()
 
     # Save results
     output_path = output_dir / "eval_vae_results.json"
