@@ -1,19 +1,26 @@
-"""Train an action-chunk VAE conditioned on VLM text-model features.
+"""Train an action-chunk VAE conditioned on frozen SmolVLA VLM features.
 
 The VAE encodes and reconstructs action chunks (sequences of future actions),
-conditioned on frozen SmolVLA features from the 10th text-model layer via
+conditioned on frozen SmolVLA prefix features (image + language + state) via
 cross-attention in both the encoder and decoder.
 
 Architecture:
-    Image → SmolVLA embed_image → (B, 16, text_hidden_dim)
-    → SmolVLA text_model layers[:10] → (B, 16, text_hidden_dim)
-    → Project to hidden_dim → VLM context for cross-attention
+    VLM context:
+        (image, language, state) → SmolVLA embed_prefix → VLM forward pass
+        → (B, seq_len, text_hidden_dim) → linear projection → (B, seq_len, hidden_dim)
 
-    Action chunk (B, chunk_size, action_dim)
-    → Project to hidden_dim + CLS token
-    → Encoder: self-attention → cross-attention (to VLM features) → mu, logvar → z
-    → Decoder: self-attention → cross-attention (to VLM features)
-    → Project to (B, chunk_size, action_dim)
+    Encoder:
+        Action chunk (B, chunk_size, action_dim) → project to hidden_dim
+        → prepend CLS token → positional embeddings
+        → self-attention → cross-attention (to VLM context)
+        → CLS output → mu_head, logvar_head → z
+
+    Decoder:
+        z → project to hidden_dim → prepend to learnable queries
+        → positional embeddings → self-attention → cross-attention (to VLM context)
+        → discard latent token → action_head → (B, chunk_size, action_dim)
+
+    All attention blocks use RMSNorm and SiLU-gated MLPs.
 
 Usage:
     python -m piper_arm.train_vae --repo-id reece-omahoney/libero --epochs 50
@@ -135,8 +142,6 @@ class ActionChunkVAE(L.LightningModule):
         n_heads: int = 8,
         intermediate_size: int = 1376,
         kl_weight: float = 1e-4,
-        lr: float = 1e-4,
-        weight_decay: float = 1e-5,
     ):
         super().__init__()
         self.save_hyperparameters(ignore=["policy"])
@@ -145,8 +150,6 @@ class ActionChunkVAE(L.LightningModule):
         self.action_dim = action_dim
         self.chunk_size = chunk_size
         self.kl_weight = kl_weight
-        self.lr = lr
-        self.weight_decay = weight_decay
         self.preprocessor, _ = make_pre_post_processors(
             policy_cfg=policy.config,
             pretrained_path=policy.config.pretrained_path,
@@ -268,8 +271,8 @@ class ActionChunkVAE(L.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, self.parameters()),
-            lr=self.lr,
-            weight_decay=self.weight_decay,
+            lr=1e-4,
+            weight_decay=1e-5,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=self.trainer.estimated_stepping_batches
@@ -304,8 +307,6 @@ def main():
     parser.add_argument("--latent-dim", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--weight-decay", type=float, default=1e-5)
     parser.add_argument("--kl-weight", type=float, default=0.01)
     parser.add_argument("--num-workers", type=int, default=8)
     args = parser.parse_args()
@@ -339,8 +340,6 @@ def main():
         chunk_size=args.chunk_size,
         latent_dim=args.latent_dim,
         kl_weight=args.kl_weight,
-        lr=args.lr,
-        weight_decay=args.weight_decay,
     )
 
     # ── Trainer ──
