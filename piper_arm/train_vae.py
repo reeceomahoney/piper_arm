@@ -1,38 +1,42 @@
-"""Train an image VAE using SmolVLM's frozen SigLIP vision encoder + connector.
+"""Train an action-chunk VAE conditioned on VLM text-model features.
 
-The VAE uses the SigLIP vision encoder and connector from a pretrained SmolVLM
-model to encode images into patch tokens. Small LLaMA-style transformers serve as
-the VAE encoder and decoder, with a CNN pixel decoder reconstructing raw pixels.
+The VAE encodes and reconstructs action chunks (sequences of future actions),
+conditioned on frozen SmolVLA features from the 10th text-model layer via
+cross-attention in both the encoder and decoder.
 
 Architecture:
-    Image (3,256,256) → normalize [-1,1]
-    → Frozen SigLIP → (B, 256, vision_dim)  [256 patches, 16×16 grid]
-    → Frozen Connector → (B, 16, connector_dim)  [16 tokens, 4×4 grid]
-    → VAE Encoder (6-layer transformer) → mu, logvar → z
-    → VAE Decoder (6-layer transformer) → (B, 16, hidden_dim)
-    → Reshape to (B, C, 4, 4)
-    → CNN Pixel Decoder (6× upsample) → (B, 3, 256, 256)
+    Image → SmolVLA embed_image → (B, 16, text_hidden_dim)
+    → SmolVLA text_model layers[:10] → (B, 16, text_hidden_dim)
+    → Project to hidden_dim → VLM context for cross-attention
+
+    Action chunk (B, chunk_size, action_dim)
+    → Project to hidden_dim + CLS token
+    → Encoder: self-attention → cross-attention (to VLM features) → mu, logvar → z
+    → Decoder: self-attention → cross-attention (to VLM features)
+    → Project to (B, chunk_size, action_dim)
 
 Usage:
-    python train_vae.py --repo-id reece-omahoney/libero --epochs 50
+    python -m piper_arm.train_vae --repo-id reece-omahoney/libero --epochs 50
 """
 
 import argparse
-import math
 import os
+from datetime import datetime
 
 import lightning as L
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.policies.factory import make_pre_post_processors
+from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy, make_att_2d_masks
+from lerobot.utils.constants import OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 from torch.utils.data import DataLoader
-from transformers import AutoModelForImageTextToText
 
 # ──────────────────────────────────────────────────────────────────────
-# LLaMA-style transformer blocks
+# Transformer blocks with cross-attention
 # ──────────────────────────────────────────────────────────────────────
 
 
@@ -47,10 +51,8 @@ class RMSNorm(nn.Module):
         return (x.float() * norm).to(x.dtype) * self.weight
 
 
-class TransformerBlock(nn.Module):
-    """
-    LLaMA-style block: RMSNorm → MHA → residual → RMSNorm → SiLU-gated MLP → residual.
-    """
+class SelfAttentionBlock(nn.Module):
+    """RMSNorm → MHA (self) → residual → RMSNorm → SiLU-gated MLP → residual."""
 
     def __init__(self, hidden_dim: int, n_heads: int, intermediate_size: int):
         super().__init__()
@@ -62,19 +64,41 @@ class TransformerBlock(nn.Module):
         self.down_proj = nn.Linear(intermediate_size, hidden_dim, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Self-attention with pre-norm
         h = self.attn_norm(x)
         h, _ = self.attn(h, h, h)
         x = x + h
-        # SiLU-gated MLP with pre-norm
         h = self.mlp_norm(x)
         h = F.silu(self.gate_proj(h)) * self.up_proj(h)
         h = self.down_proj(h)
         return x + h
 
 
-class TransformerStack(nn.Module):
-    """Stack of LLaMA-style transformer blocks with learned positional embeddings."""
+class CrossAttentionBlock(nn.Module):
+    """RMSNorm → MHA (cross) → residual → RMSNorm → SiLU-gated MLP → residual."""
+
+    def __init__(self, hidden_dim: int, n_heads: int, intermediate_size: int):
+        super().__init__()
+        self.attn_norm = RMSNorm(hidden_dim)
+        self.ctx_norm = RMSNorm(hidden_dim)
+        self.attn = nn.MultiheadAttention(hidden_dim, n_heads, batch_first=True)
+        self.mlp_norm = RMSNorm(hidden_dim)
+        self.gate_proj = nn.Linear(hidden_dim, intermediate_size, bias=False)
+        self.up_proj = nn.Linear(hidden_dim, intermediate_size, bias=False)
+        self.down_proj = nn.Linear(intermediate_size, hidden_dim, bias=False)
+
+    def forward(self, x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
+        h = self.attn_norm(x)
+        c = self.ctx_norm(context)
+        h, _ = self.attn(h, c, c)
+        x = x + h
+        h = self.mlp_norm(x)
+        h = F.silu(self.gate_proj(h)) * self.up_proj(h)
+        h = self.down_proj(h)
+        return x + h
+
+
+class EncoderDecoderStack(nn.Module):
+    """1 self-attention layer + 1 cross-attention layer with positional embeddings."""
 
     def __init__(
         self,
@@ -82,123 +106,94 @@ class TransformerStack(nn.Module):
         hidden_dim: int = 512,
         n_heads: int = 8,
         intermediate_size: int = 1376,
-        n_layers: int = 6,
     ):
         super().__init__()
         self.pos_emb = nn.Parameter(torch.randn(1, seq_len, hidden_dim) * 0.02)
-        self.layers = nn.ModuleList(
-            [
-                TransformerBlock(hidden_dim, n_heads, intermediate_size)
-                for _ in range(n_layers)
-            ]
-        )
+        self.self_attn = SelfAttentionBlock(hidden_dim, n_heads, intermediate_size)
+        self.cross_attn = CrossAttentionBlock(hidden_dim, n_heads, intermediate_size)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
         x = x + self.pos_emb
-        for layer in self.layers:
-            x = layer(x)
+        x = self.self_attn(x)
+        x = self.cross_attn(x, context)
         return x
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Image VAE (LightningModule)
+# Action Chunk VAE (LightningModule)
 # ──────────────────────────────────────────────────────────────────────
 
 
-class ImageVAE(L.LightningModule):
+class ActionChunkVAE(L.LightningModule):
     def __init__(
         self,
-        vision_model: nn.Module,
-        connector: nn.Module,
-        connector_dim: int,
-        camera_key: str = "observation.images.image",
+        policy: SmolVLAPolicy,
+        action_dim: int,
+        chunk_size: int = 16,
         latent_dim: int = 256,
         hidden_dim: int = 512,
         n_heads: int = 8,
         intermediate_size: int = 1376,
-        n_layers: int = 6,
-        n_tokens: int = 16,
         kl_weight: float = 1e-4,
         lr: float = 1e-4,
         weight_decay: float = 1e-5,
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=["vision_model", "connector"])
+        self.save_hyperparameters(ignore=["policy"])
         self.latent_dim = latent_dim
         self.hidden_dim = hidden_dim
-        self.n_tokens = n_tokens
-        self.camera_key = camera_key
+        self.action_dim = action_dim
+        self.chunk_size = chunk_size
         self.kl_weight = kl_weight
         self.lr = lr
         self.weight_decay = weight_decay
+        self.preprocessor, _ = make_pre_post_processors(
+            policy_cfg=policy.config,
+            pretrained_path=policy.config.pretrained_path,
+        )
 
-        # Frozen pretrained components
-        self.vision_model = vision_model
-        self.connector = connector
-        for module in [self.vision_model, self.connector]:
-            module.eval()
-            for p in module.parameters():
-                p.requires_grad = False
+        # Frozen SmolVLA policy (used only for feature extraction)
+        self.policy = policy
+        self.policy.eval()
+        for p in self.policy.parameters():
+            p.requires_grad = False
+
+        # Project text-model features to hidden_dim for cross-attention
+        self.vlm_proj = nn.Linear(
+            policy.model.vlm_with_expert.config.text_config.hidden_size, hidden_dim
+        )
 
         # ── Encoder ──
-        self.enc_proj = nn.Linear(connector_dim, hidden_dim)
+        self.enc_proj = nn.Linear(action_dim, hidden_dim)
         self.cls_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
-        self.encoder = TransformerStack(
-            seq_len=n_tokens + 1,  # +1 for CLS
+        self.encoder = EncoderDecoderStack(
+            seq_len=chunk_size + 1,  # +1 for CLS
             hidden_dim=hidden_dim,
             n_heads=n_heads,
             intermediate_size=intermediate_size,
-            n_layers=n_layers,
         )
         self.mu_head = nn.Linear(hidden_dim, latent_dim)
         self.logvar_head = nn.Linear(hidden_dim, latent_dim)
 
         # ── Decoder ──
         self.dec_latent_proj = nn.Linear(latent_dim, hidden_dim)
-        self.dec_queries = nn.Parameter(torch.randn(1, n_tokens, hidden_dim) * 0.02)
-        self.decoder = TransformerStack(
-            seq_len=n_tokens + 1,  # +1 for latent token
+        self.dec_queries = nn.Parameter(torch.randn(1, chunk_size, hidden_dim) * 0.02)
+        self.decoder = EncoderDecoderStack(
+            seq_len=chunk_size + 1,  # +1 for latent token
             hidden_dim=hidden_dim,
             n_heads=n_heads,
             intermediate_size=intermediate_size,
-            n_layers=n_layers,
         )
+        self.action_head = nn.Linear(hidden_dim, action_dim)
 
-        # ── CNN Pixel Decoder ──
-        # Reshape decoder output: (B, n_tokens, hidden_dim) → (B, hidden_dim, 4, 4)
-        # Then 6× ConvTranspose2d (2× each): 4→8→16→32→64→128→256
-        cnn_channels = [hidden_dim, 256, 256, 128, 64, 32, 3]
-        cnn_layers = []
-        for i in range(len(cnn_channels) - 1):
-            cnn_layers.append(
-                nn.ConvTranspose2d(
-                    cnn_channels[i],
-                    cnn_channels[i + 1],
-                    kernel_size=4,
-                    stride=2,
-                    padding=1,
-                )
-            )
-            if i < len(cnn_channels) - 2:
-                cnn_layers.append(nn.SiLU())
-        cnn_layers.append(nn.Sigmoid())
-        self.pixel_decoder = nn.Sequential(*cnn_layers)
-
-    @torch.no_grad()
-    def encode_image(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        """Run frozen vision encoder + connector."""
-        embed_type = self.vision_model.embeddings.patch_embedding.weight.dtype
-        hidden = self.vision_model(
-            pixel_values=pixel_values.to(dtype=embed_type)
-        ).last_hidden_state
-        return self.connector(hidden).float()
-
-    def encode(self, tokens: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """VAE encoder: patch tokens → mu, logvar."""
-        x = self.enc_proj(tokens)  # (B, 64, hidden_dim)
+    def encode(
+        self, actions: torch.Tensor, vlm_context: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """VAE encoder: action chunk + VLM context → mu, logvar."""
+        x = self.enc_proj(actions)  # (B, chunk_size, hidden_dim)
         cls_token = self.cls_token.expand(x.size(0), -1, -1)
-        x = torch.cat([cls_token, x], dim=1)  # (B, 65, hidden_dim)
-        x = self.encoder(x)
+        x = torch.cat([cls_token, x], dim=1)  # (B, chunk_size+1, hidden_dim)
+        x = self.encoder(x, vlm_context)
         cls_out = x[:, 0]  # (B, hidden_dim)
         mu = self.mu_head(cls_out)
         logvar = self.logvar_head(cls_out)
@@ -209,34 +204,55 @@ class ImageVAE(L.LightningModule):
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def decode(self, z: torch.Tensor) -> torch.Tensor:
-        """VAE decoder: z → reconstructed image (B, 3, 256, 256) in [0, 1]."""
+    def decode(self, z: torch.Tensor, vlm_context: torch.Tensor) -> torch.Tensor:
+        """VAE decoder: z + VLM context → reconstructed action chunk."""
         B = z.size(0)
         latent_token = self.dec_latent_proj(z).unsqueeze(1)  # (B, 1, hidden_dim)
-        queries = self.dec_queries.expand(B, -1, -1)  # (B, n_tokens, hidden_dim)
-        x = torch.cat([latent_token, queries], dim=1)  # (B, n_tokens+1, hidden_dim)
-        x = self.decoder(x)
-        x = x[:, 1:]  # discard latent token, keep spatial tokens
-        grid_size = int(math.sqrt(self.n_tokens))
-        x = x.permute(0, 2, 1).view(B, self.hidden_dim, grid_size, grid_size)
-        return self.pixel_decoder(x)
+        queries = self.dec_queries.expand(B, -1, -1)  # (B, chunk_size, hidden_dim)
+        x = torch.cat([latent_token, queries], dim=1)  # (B, chunk_size+1, hidden_dim)
+        x = self.decoder(x, vlm_context)
+        x = x[:, 1:]  # discard latent token, keep action tokens
+        return self.action_head(x)  # (B, chunk_size, action_dim)
 
-    def forward(
-        self, pixel_values: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        tokens = self.encode_image(pixel_values)
-        mu, logvar = self.encode(tokens)
+    def forward(self, batch: dict):
+        # preprocess
+        batch = self.preprocessor(batch)
+        images, img_masks = self.policy.prepare_images(batch)
+        state = self.policy.prepare_state(batch)
+        actions = self.policy.prepare_action(batch)
+        lang_tokens = batch[f"{OBS_LANGUAGE_TOKENS}"]
+        lang_masks = batch[f"{OBS_LANGUAGE_ATTENTION_MASK}"]
+
+        # prefix embedding
+        prefix_embs, prefix_pad_masks, prefix_att_masks = (
+            self.policy.model.embed_prefix(
+                images, img_masks, lang_tokens, lang_masks, state=state
+            )
+        )
+        prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+        prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+
+        # vlm forward pass
+        (prefix_out, _), _ = self.policy.model.vlm_with_expert.forward(
+            attention_mask=prefix_att_2d_masks,
+            position_ids=prefix_position_ids,
+            past_key_values=None,
+            inputs_embeds=[prefix_embs, None],
+            use_cache=False,
+            fill_kv_cache=True,
+        )
+
+        # vae forward pass
+        vlm_context = self.vlm_proj(prefix_out.to(self.vlm_proj.weight.dtype))
+        mu, logvar = self.encode(actions, vlm_context)
         z = self.reparameterize(mu, logvar)
-        recon = self.decode(z)
-        return recon, mu, logvar
+        recon = self.decode(z, vlm_context)
 
-    def training_step(self, batch, batch_idx):
-        images = batch[self.camera_key]
-        targets = images
-        pixel_values = (images - 0.5) / 0.5
+        return recon, actions, mu, logvar
 
-        recon, mu, logvar = self(pixel_values)
-        recon_loss = F.mse_loss(recon, targets)
+    def training_step(self, batch, _):
+        recon, actions, mu, logvar = self(batch)
+        recon_loss = F.mse_loss(recon, actions)
         kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
         loss = recon_loss + self.kl_weight * kl_loss
 
@@ -265,8 +281,7 @@ class ImageVAE(L.LightningModule):
 
     def train(self, mode=True):
         super().train(mode)
-        self.vision_model.eval()
-        self.connector.eval()
+        self.policy.eval()
         return self
 
 
@@ -277,43 +292,31 @@ class ImageVAE(L.LightningModule):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train image VAE with SmolVLM vision encoder"
+        description="Train action-chunk VAE with VLM cross-attention"
     )
     parser.add_argument("--repo-id", type=str, default="reece-omahoney/libero")
-    parser.add_argument("--camera-key", type=str, default="observation.images.image")
-    parser.add_argument("--latent-dim", type=int, default=256)
+    parser.add_argument(
+        "--policy-path",
+        type=str,
+        default="reece-omahoney/smolvla-libero-256",
+    )
+    parser.add_argument("--chunk-size", type=int, default=16)
+    parser.add_argument("--latent-dim", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-5)
-    parser.add_argument("--kl-weight", type=float, default=1e-4)
+    parser.add_argument("--kl-weight", type=float, default=0.01)
     parser.add_argument("--num-workers", type=int, default=8)
     args = parser.parse_args()
 
-    # ── Load frozen vision encoder + connector ──
-    VLM_MODEL = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
-    print(f"Loading VLM: {VLM_MODEL}")
-    vlm = AutoModelForImageTextToText.from_pretrained(VLM_MODEL, dtype=torch.bfloat16)
-    vision_model = vlm.model.vision_model
-    connector = vlm.model.connector
-    connector_dim = vlm.config.text_config.hidden_size
-    del vlm
-    print(f"Connector output dim: {connector_dim}")
-
-    # ── Model ──
-    model = ImageVAE(
-        vision_model=vision_model,
-        connector=connector,
-        connector_dim=connector_dim,
-        camera_key=args.camera_key,
-        latent_dim=args.latent_dim,
-        kl_weight=args.kl_weight,
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-    )
-
     # ── Data ──
-    dataset = LeRobotDataset(repo_id=args.repo_id)
+    print(f"Loading dataset from repo: {args.repo_id}")
+    # Use delta_timestamps to load action chunks of chunk_size future steps
+    delta_timestamps = {
+        "action": [i / 10.0 for i in range(args.chunk_size)],
+    }
+    dataset = LeRobotDataset(repo_id=args.repo_id, delta_timestamps=delta_timestamps)
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -322,13 +325,31 @@ def main():
         pin_memory=True,
         drop_last=True,
     )
+    action_dim = dataset.meta.features["action"]["shape"][0]
+
+    # ── Load frozen SmolVLA policy ──
+    print(f"Loading SmolVLA: {args.policy_path}")
+    policy = SmolVLAPolicy.from_pretrained(args.policy_path)
+    policy.eval()
+
+    # ── Model ──
+    model = ActionChunkVAE(
+        policy=policy,
+        action_dim=action_dim,
+        chunk_size=args.chunk_size,
+        latent_dim=args.latent_dim,
+        kl_weight=args.kl_weight,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+    )
 
     # ── Trainer ──
-    output_dir = "outputs/vae"
-    logger = WandbLogger(project="image-vae", save_dir=output_dir)
+    timestamp = datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
+    output_dir = f"outputs/action_vae/{timestamp}"
+    logger = WandbLogger(project="action-chunk-vae", save_dir=output_dir)
     checkpoint_cb = ModelCheckpoint(
         dirpath=os.path.join(output_dir, "checkpoints"),
-        every_n_epochs=1,
+        every_n_epochs=10,
         save_top_k=-1,
     )
     trainer = L.Trainer(
