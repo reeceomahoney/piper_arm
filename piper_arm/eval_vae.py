@@ -1,20 +1,20 @@
-"""Evaluate a pretrained policy with per-timestep VAE likelihood scoring.
+"""Evaluate a pretrained policy with per-timestep action-chunk VAE scoring.
 
 Rolls out a policy in LIBERO and at each timestep passes the observation
-image through a trained ImageVAE to compute reconstruction loss, KL
-divergence, and ELBO — measuring how "in-distribution" each observation is.
+image and a chunk of future actions through a trained ActionChunkVAE to
+compute reconstruction loss, KL divergence, and ELBO.
 
 Usage:
     python piper_arm/eval_vae.py \
-        --policy-path reece-omahoney/smolvla-libero \
-        --vae-checkpoint outputs/vae/checkpoints/epoch=49-step=XXXXX.ckpt \
-        --suite-name libero_object \
+        --policy-path reece-omahoney/smolvla-libero-256 \
+        --vae-checkpoint outputs/action_vae/checkpoints/epoch=49-step=XXXXX.ckpt \
         --n-episodes 1
 """
 
 import argparse
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -26,11 +26,38 @@ from lerobot.envs.factory import make_env_pre_post_processors
 from lerobot.envs.libero import TASK_SUITE_MAX_STEPS, LiberoEnv, _get_suite
 from lerobot.envs.utils import preprocess_observation
 from lerobot.policies.factory import make_policy, make_pre_post_processors
+from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+from lerobot.policies.utils import populate_queues
 from lerobot.utils.constants import ACTION
-from torchvision.transforms.functional import resize
-from transformers import AutoModelForImageTextToText
 
-from piper_arm.train_vae import ImageVAE
+from piper_arm.train_vae import ActionChunkVAE
+
+
+@torch.no_grad()
+def select_action_with_chunk(
+    policy: SmolVLAPolicy, batch: dict
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Like policy.select_action but also returns the full action chunk.
+
+    Returns:
+        action: Single action tensor for env stepping.
+        action_chunk: (B, n_action_steps, action_dim) on forward-pass steps,
+                      None on dequeue steps.
+    """
+    policy.eval()
+    batch = policy._prepare_batch(batch)
+    policy._queues = populate_queues(policy._queues, batch, exclude_keys=[ACTION])
+
+    action_chunk = None
+    if len(policy._queues[ACTION]) == 0:
+        action_chunk = policy._get_action_chunk(batch)
+        # Fill the queue (transposed: n_action_steps, batch_size, action_dim)
+        policy._queues[ACTION].extend(
+            action_chunk.transpose(0, 1)[: policy.config.n_action_steps]
+        )
+
+    action = policy._queues[ACTION].popleft()
+    return action, action_chunk
 
 
 def add_batch_dim(obs: dict) -> dict:
@@ -46,67 +73,34 @@ def add_batch_dim(obs: dict) -> dict:
     return result
 
 
-def load_vae(checkpoint_path: str, device: torch.device) -> ImageVAE:
-    """Load a trained ImageVAE from a Lightning checkpoint.
-
-    The frozen vision_model and connector are not saved in the checkpoint,
-    so we load them fresh from the SmolVLM weights and pass them in.
-    """
-    VLM_MODEL = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
-    print(f"Loading VLM for VAE: {VLM_MODEL}")
-    vlm = AutoModelForImageTextToText.from_pretrained(VLM_MODEL, dtype=torch.bfloat16)
-    vision_model = vlm.model.vision_model
-    connector = vlm.model.connector
-    connector_dim = vlm.config.text_config.hidden_size
-    del vlm
-
-    vae = ImageVAE.load_from_checkpoint(
-        checkpoint_path,
-        vision_model=vision_model,
-        connector=connector,
-        connector_dim=connector_dim,
-    )
-    vae.to(device)
-    vae.eval()
-    return vae
-
-
 @torch.no_grad()
-def compute_vae_metrics(vae: ImageVAE, image: torch.Tensor, kl_weight: float) -> dict:
-    """Compute VAE reconstruction metrics for a single image.
+def compute_vae_metrics(vae: ActionChunkVAE, batch: dict) -> dict:
+    """Compute VAE reconstruction metrics for an observation batch + action chunk.
 
     Args:
-        vae: Trained ImageVAE model.
-        image: (1, C, H, W) tensor in [0, 1].
-        kl_weight: KL weight matching VAE training.
+        vae: Trained ActionChunkVAE model.
+        batch: Dict with observation keys, task description, and action chunk,
+               in the same format as LeRobotDataset returns (with batch dim).
 
     Returns:
-        Dict with recon_loss, kl_loss, elbo, mu_mean, mu_std, logvar_mean,
-        and the reconstruction tensor.
+        Dict with recon_loss, kl_loss, elbo
     """
-    # Normalize to [-1, 1] for the vision encoder
-    pixel_values = (image - 0.5) / 0.5
-    recon, mu, logvar = vae(pixel_values)
+    recon, actions, mu, logvar = vae(batch)
 
-    # Reconstruction target is [0, 1]
-    recon_loss = F.mse_loss(recon, image)
+    recon_loss = F.mse_loss(recon, actions)
     kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-    elbo = -(recon_loss + kl_weight * kl_loss)
+    elbo = -(recon_loss + vae.kl_weight * kl_loss)
 
     return {
         "recon_loss": recon_loss.item(),
         "kl_loss": kl_loss.item(),
         "elbo": elbo.item(),
-        "mu_mean": mu.mean().item(),
-        "mu_std": mu.std().item(),
-        "logvar_mean": logvar.mean().item(),
-        "recon": recon,
     }
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Policy rollout with per-timestep VAE likelihood"
+        description="Policy rollout with per-timestep action-chunk VAE likelihood"
     )
     parser.add_argument(
         "--policy-path",
@@ -118,46 +112,17 @@ def main():
         "--vae-checkpoint",
         type=str,
         required=True,
-        help="Path to ImageVAE Lightning checkpoint",
-    )
-    parser.add_argument(
-        "--suite-name", type=str, default="libero_10", help="LIBERO task suite"
-    )
-    parser.add_argument(
-        "--task-ids",
-        type=int,
-        nargs="*",
-        default=None,
-        help="Specific task IDs (default: all)",
-    )
-    parser.add_argument(
-        "--camera-key",
-        type=str,
-        default="observation.images.image",
-        help="Camera key for VAE input",
+        help="Path to ActionChunkVAE Lightning checkpoint",
     )
     parser.add_argument("--n-episodes", type=int, default=1, help="Episodes per task")
-    parser.add_argument(
-        "--kl-weight",
-        type=float,
-        default=1e-4,
-        help="KL weight matching VAE training",
-    )
-    parser.add_argument(
-        "--output-dir", type=str, default="outputs/eval_vae", help="Output directory"
-    )
-    parser.add_argument(
-        "--save-recon",
-        action="store_true",
-        help="Save reconstruction images every 10 steps",
-    )
     args = parser.parse_args()
 
     os.environ["MUJOCO_GL"] = "egl"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # ── Load policy ──
-    env_cfg = LiberoEnvConfig(args.suite_name)
+    suite_name = "libero_10"
+    env_cfg = LiberoEnvConfig(suite_name)
     policy_cfg = PreTrainedConfig.from_pretrained(args.policy_path)
     policy_cfg.pretrained_path = Path(args.policy_path)
 
@@ -171,20 +136,20 @@ def main():
         env_cfg, policy_cfg
     )
 
-    # ── Load VAE ──
-    vae = load_vae(args.vae_checkpoint, device)
+    # ── Load VAE (reuses the same policy for feature extraction) ──
+    vae = ActionChunkVAE.load_from_checkpoint(
+        args.vae_checkpoint, policy=policy, map_location=device
+    ).eval()
 
     # ── Setup ──
-    suite = _get_suite(args.suite_name)
+    suite = _get_suite(suite_name)
     n_tasks = len(suite.tasks)
-    max_steps = TASK_SUITE_MAX_STEPS.get(args.suite_name, 280)
-    task_ids = args.task_ids if args.task_ids is not None else list(range(n_tasks))
+    max_steps = TASK_SUITE_MAX_STEPS.get(suite_name, 280)
+    task_ids = list(range(n_tasks))
 
-    output_dir = Path(args.output_dir)
+    timestamp = datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
+    output_dir = Path(f"outputs/eval_action_vae/{timestamp}")
     output_dir.mkdir(parents=True, exist_ok=True)
-    if args.save_recon:
-        recon_dir = output_dir / "reconstructions"
-        recon_dir.mkdir(parents=True, exist_ok=True)
 
     results = []
 
@@ -195,7 +160,7 @@ def main():
         env = LiberoEnv(
             task_suite=suite,
             task_id=task_id,
-            task_suite_name=args.suite_name,
+            task_suite_name=suite_name,
             obs_type="pixels_agent_pos",
             camera_name="agentview_image,robot0_eye_in_hand_image",
             init_states=True,
@@ -204,7 +169,7 @@ def main():
         )
 
         for ep in range(args.n_episodes):
-            env._init_state_id = ep
+            env.init_state_id = ep
             obs, info = env.reset()
             policy.reset()
             is_success = False
@@ -215,42 +180,35 @@ def main():
                 batched_obs = add_batch_dim(obs)
                 policy_obs = preprocess_observation(batched_obs)
 
-                # Extract image for VAE before policy preprocessor runs
-                image = policy_obs[args.camera_key].to(device)  # (1, C, H, W) [0,1]
-                if image.shape[-2:] != (256, 256):
-                    image = resize(image, [256, 256])
-
-                # Compute VAE metrics
-                metrics = compute_vae_metrics(vae, image, args.kl_weight)
-                step_record = {
-                    "step": step,
-                    "recon_loss": metrics["recon_loss"],
-                    "kl_loss": metrics["kl_loss"],
-                    "elbo": metrics["elbo"],
-                    "mu_mean": metrics["mu_mean"],
-                    "mu_std": metrics["mu_std"],
-                    "logvar_mean": metrics["logvar_mean"],
-                }
-                timestep_metrics.append(step_record)
-
-                # Save reconstruction images periodically
-                if args.save_recon and step % 10 == 0:
-                    from torchvision.utils import save_image
-
-                    pair = torch.cat([image, metrics["recon"]], dim=0)
-                    save_image(
-                        pair,
-                        recon_dir / f"task{task_id}_ep{ep}_step{step}.png",
-                        nrow=2,
-                    )
-
                 # Run policy
                 policy_obs["task"] = [env.task_description]
                 policy_obs = env_preprocessor(policy_obs)
+
+                # Save pre-normalized obs for VAE (which has its own preprocessor)
+                vae_obs = {
+                    k: v.clone().to(device) if isinstance(v, torch.Tensor) else v
+                    for k, v in policy_obs.items()
+                }
+
                 policy_obs = preprocessor(policy_obs)
 
                 with torch.inference_mode():
-                    action = policy.select_action(policy_obs)
+                    action, action_chunk = select_action_with_chunk(policy, policy_obs)
+
+                # On forward-pass steps, score the full action chunk with the VAE
+                if action_chunk is not None:
+                    vae_batch = vae_obs
+                    vae_batch["action"] = action_chunk[:, : vae.chunk_size].to(device)
+
+                    metrics = compute_vae_metrics(vae, vae_batch)
+                    step_record = {
+                        "step": step,
+                        "recon_loss": metrics["recon_loss"],
+                        "kl_loss": metrics["kl_loss"],
+                        "elbo": metrics["elbo"],
+                    }
+                    timestep_metrics.append(step_record)
+
                 action = postprocessor(action)
 
                 action_transition = {ACTION: action}
@@ -268,9 +226,12 @@ def main():
                 obs = env._format_raw_obs(raw_obs)
 
             # Episode summary
-            mean_recon = np.mean([m["recon_loss"] for m in timestep_metrics])
-            mean_kl = np.mean([m["kl_loss"] for m in timestep_metrics])
-            mean_elbo = np.mean([m["elbo"] for m in timestep_metrics])
+            if timestep_metrics:
+                mean_recon = np.mean([m["recon_loss"] for m in timestep_metrics])
+                mean_kl = np.mean([m["kl_loss"] for m in timestep_metrics])
+                mean_elbo = np.mean([m["elbo"] for m in timestep_metrics])
+            else:
+                mean_recon = mean_kl = mean_elbo = float("nan")
 
             episode_record = {
                 "task_id": task_id,
@@ -336,7 +297,6 @@ def plot_vae_stats(results: list[dict], output_dir: Path):
         ax.set_ylabel(title)
         ax.grid(True, alpha=0.3)
 
-    # Deduplicated legend showing only success/failure colors
     from matplotlib.lines import Line2D
 
     handles = [
@@ -346,7 +306,7 @@ def plot_vae_stats(results: list[dict], output_dir: Path):
     axes[0].legend(handles=handles, fontsize=8)
 
     axes[-1].set_xlabel("Timestep")
-    fig.suptitle("Per-Timestep VAE Metrics")
+    fig.suptitle("Per-Timestep Action-Chunk VAE Metrics")
     fig.tight_layout()
 
     plot_path = output_dir / "eval_vae_stats.png"
