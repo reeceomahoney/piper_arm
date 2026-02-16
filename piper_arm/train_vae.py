@@ -118,11 +118,13 @@ class EncoderDecoderStack(nn.Module):
         self.pos_emb = nn.Parameter(torch.randn(1, seq_len, hidden_dim) * 0.02)
         self.self_attn = SelfAttentionBlock(hidden_dim, n_heads, intermediate_size)
         self.cross_attn = CrossAttentionBlock(hidden_dim, n_heads, intermediate_size)
+        self.final_norm = RMSNorm(hidden_dim)
 
     def forward(self, x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
         x = x + self.pos_emb
         x = self.self_attn(x)
         x = self.cross_attn(x, context)
+        x = self.final_norm(x)
         return x
 
 
