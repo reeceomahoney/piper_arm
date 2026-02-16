@@ -78,6 +78,7 @@ def sample_actions_with_velocity_norms(
     noise = model.sample_noise(actions_shape, device)
     x_t = noise
     v_norms = []
+    velocities = []  # store full vectors for curvature computation
 
     for step in range(num_steps):
         time = 1.0 + step * dt
@@ -95,6 +96,8 @@ def sample_actions_with_velocity_norms(
         # L2 norm of the full velocity vector, averaged over batch
         v_norm = v_t.norm(dim=-1).mean().item()
         v_norms.append(v_norm)
+        # Flatten to (B, chunk*dim) for curvature calc
+        velocities.append(v_t.reshape(bsize, -1))
 
         x_t = x_t + dt * v_t
 
@@ -108,10 +111,28 @@ def sample_actions_with_velocity_norms(
     v_diffs = [v_norms[i + 1] - v_norms[i] for i in range(len(v_norms) - 1)]
     v_diff_var = float(np.var(v_diffs)) if len(v_diffs) > 1 else 0.0
 
+    # Curvature of the generation trajectory: κ = ||a_perp|| / ||v||^2
+    # where a = (v_{i+1} - v_i) / dt and a_perp is the component of a
+    # perpendicular to v.
+    curvatures = []
+    for i in range(len(velocities) - 1):
+        v = velocities[i]  # (B, D)
+        a = (velocities[i + 1] - v) / abs(dt)  # (B, D)
+        v_norm_sq = (v * v).sum(dim=-1, keepdim=True).clamp(min=1e-8)  # (B, 1)
+        v_hat = v / v_norm_sq.sqrt()  # unit velocity
+        a_parallel = (a * v_hat).sum(dim=-1, keepdim=True) * v_hat
+        a_perp = a - a_parallel
+        kappa = a_perp.norm(dim=-1) / v_norm_sq.squeeze(-1)  # (B,)
+        curvatures.append(kappa.mean().item())
+
+    mean_curvature = float(np.mean(curvatures)) if curvatures else 0.0
+
     return {
         "v_norms_per_step": v_norms,
         "mean_v_norm": float(np.mean(norms_for_mean)),
         "v_diff_variance": v_diff_var,
+        "mean_curvature": mean_curvature,
+        "curvatures_per_step": curvatures,
         "action_chunk": action_chunk,
     }
 
@@ -143,10 +164,10 @@ def select_action_with_velocity_norms(
 
 
 def plot_velocity_norms(results: list[dict], output_dir: Path):
-    """Plot per-timestep mean velocity norm and velocity diff variance."""
+    """Plot per-timestep velocity norm, diff variance, and curvature."""
     import matplotlib.pyplot as plt
 
-    fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
 
     for record in results:
         steps = [t["step"] for t in record["timesteps"]]
@@ -158,8 +179,12 @@ def plot_velocity_norms(results: list[dict], output_dir: Path):
         diff_vals = [t["v_diff_variance"] for t in record["timesteps"]]
         axes[1].plot(steps, diff_vals, color=color, alpha=0.7)
 
+        curv_vals = [t["mean_curvature"] for t in record["timesteps"]]
+        axes[2].plot(steps, curv_vals, color=color, alpha=0.7)
+
     axes[0].set_ylabel("Mean Velocity Norm")
     axes[1].set_ylabel("Var of Consecutive Velocity Diffs")
+    axes[2].set_ylabel("Mean Trajectory Curvature")
 
     for ax in axes:
         ax.grid(True, alpha=0.3)
@@ -261,7 +286,9 @@ def main():
                         "step": step,
                         "mean_v_norm": stats["mean_v_norm"],
                         "v_diff_variance": stats["v_diff_variance"],
+                        "mean_curvature": stats["mean_curvature"],
                         "v_norms_per_ode_step": stats["v_norms_per_step"],
+                        "curvatures_per_ode_step": stats["curvatures_per_step"],
                     }
                     timestep_metrics.append(step_record)
 
