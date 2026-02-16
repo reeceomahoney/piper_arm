@@ -304,7 +304,7 @@ def main():
         default="reece-omahoney/smolvla-libero-256",
     )
     parser.add_argument("--chunk-size", type=int, default=16)
-    parser.add_argument("--latent-dim", type=int, default=64)
+    parser.add_argument("--latent-dim", type=int, default=16)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--kl-weight", type=float, default=0.01)
@@ -348,7 +348,7 @@ def main():
     logger = WandbLogger(project="action-chunk-vae", save_dir=output_dir)
     checkpoint_cb = ModelCheckpoint(
         dirpath=os.path.join(output_dir, "checkpoints"),
-        every_n_epochs=10,
+        every_n_epochs=5,
         save_top_k=-1,
     )
     trainer = L.Trainer(
