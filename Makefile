@@ -57,7 +57,7 @@ submit: sync
 list:
 	@ssh $(REMOTE_HOST) 'sinfo -N -p short -o "%.20N %.5t %.15C %.10m %.20G" | awk "NR==1 || /h100/ || /l40s/"'
 
-monitor:
+status:
 	ssh $(REMOTE_HOST) 'squeue -u $$USER'
 
 cancel:
