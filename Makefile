@@ -1,6 +1,6 @@
 .PHONY: train train-vae finetune eval record play sync submit list monitor logs clean-logs container fix-metaworld
 
-METAWORLD_CFG := $(shell uv run python -c "from pathlib import Path; import lerobot; print(Path(lerobot.__file__).parent / 'envs' / 'metaworld_config.json')")
+# METAWORLD_CFG = $(shell uv run python -c "from pathlib import Path; import lerobot; print(Path(lerobot.__file__).parent / 'envs' / 'metaworld_config.json')")
 
 fix-metaworld:
 	@test -f $(METAWORLD_CFG) || { \
@@ -13,7 +13,7 @@ fix-metaworld:
 # Training #
 ############
 
-train: fix-metaworld
+train:
 	uv run lerobot-train --config_path configs/train.yaml
 
 train-vae:

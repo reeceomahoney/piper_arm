@@ -7,4 +7,4 @@
 
 set -euo pipefail
 
-singularity build --fakeroot container.sif container.def
+singularity build --fakeroot --force container.sif container.def

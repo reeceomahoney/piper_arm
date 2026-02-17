@@ -1,6 +1,12 @@
 Bootstrap: docker
 From: python:3.10-slim
 
+%files
+    pyproject.toml /opt/piper_arm/pyproject.toml
+    uv.lock /opt/piper_arm/uv.lock
+    README.md /opt/piper_arm/README.md
+    piper_arm /opt/piper_arm/piper_arm
+
 %post
     apt-get update && apt-get install -y --no-install-recommends \
         curl ffmpeg libavutil-dev libavcodec-dev libavformat-dev libswscale-dev \
@@ -9,9 +15,11 @@ From: python:3.10-slim
     && rm -rf /var/lib/apt/lists/*
 
     curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+    cd /opt/piper_arm && uv sync --frozen
 
 %environment
-    export PATH="/root/.local/bin:$PATH"
+    export PATH="/opt/piper_arm/.venv/bin:$PATH"
     export PYTHONDONTWRITEBYTECODE=1
     export MUJOCO_GL=osmesa
     export UV_CACHE_DIR=.cache/uv
