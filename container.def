@@ -1,0 +1,23 @@
+Bootstrap: docker
+From: python:3.10-slim
+
+%post
+    apt-get update && apt-get install -y --no-install-recommends \
+        curl ffmpeg libavutil-dev libavcodec-dev libavformat-dev libswscale-dev \
+        git linux-libc-dev build-essential cmake \
+        libosmesa6-dev libglfw3 \
+    && rm -rf /var/lib/apt/lists/*
+
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+
+%environment
+    export PATH="/root/.local/bin:$PATH"
+    export PYTHONDONTWRITEBYTECODE=1
+    export MUJOCO_GL=osmesa
+    export UV_CACHE_DIR=.cache/uv
+    export HF_HOME=.cache/huggingface
+    export LIBERO_CONFIG_PATH=.cache/libero
+    export WANDB_CACHE_DIR=.cache/wandb
+
+%runscript
+    exec "$@"

@@ -1,4 +1,4 @@
-.PHONY: train finetune eval record play sync submit list monitor logs clean-logs docker fix-metaworld
+.PHONY: train train-vae finetune eval record play sync submit list monitor logs clean-logs container fix-metaworld
 
 METAWORLD_CFG := $(shell uv run python -c "from pathlib import Path; import lerobot; print(Path(lerobot.__file__).parent / 'envs' / 'metaworld_config.json')")
 
@@ -15,6 +15,9 @@ fix-metaworld:
 
 train: fix-metaworld
 	uv run lerobot-train --config_path configs/train.yaml
+
+train-vae:
+	uv run piper_arm/train_vae.py
 
 finetune:
 	uv run lerobot-train --config_path configs/train.yaml \
@@ -76,10 +79,9 @@ clean-logs:
 			rm -f slurm-*.out; \
 		fi'
 
-##########
-# Docker #
-##########
+###############
+# Singularity #
+###############
 
-docker:
-	docker build -t reeceomahoney/piper-arm:latest .
-	docker push reeceomahoney/piper-arm:latest
+container: sync
+	ssh $(REMOTE_HOST) 'cd $(REMOTE_PATH) && sbatch bin/build.sh'
