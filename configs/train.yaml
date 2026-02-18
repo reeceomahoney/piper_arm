@@ -1,4 +1,4 @@
-job_name: smolvla-libero-256
+job_name: smolvla-libero-16-chunk
 num_workers: 8
 batch_size: 64
 steps: 100_000
@@ -10,13 +10,15 @@ dataset:
 env:
   type: libero
   task: libero_10
+  fps: 10
 
 # these are overriden when finetuning
 policy:
   type: smolvla
-  repo_id: reece-omahoney/smolvla-libero-256
+  repo_id: reece-omahoney/smolvla-libero-16-chunk
   device: cuda
-  n_action_steps: 10
+  chunk_size: 16
+  n_action_steps: 8
   load_vlm_weights: true
   resize_imgs_with_padding: [256, 256]
   max_state_dim: 8
