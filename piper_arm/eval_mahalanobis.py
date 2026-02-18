@@ -333,9 +333,10 @@ def main():
 
             if stats is not None:
                 for i in range(args.n_episodes):
-                    timestep_metrics[i].append(
-                        {"step": step, "mahalanobis": stats["mahalanobis"][i]}
-                    )
+                    if not done[i]:
+                        timestep_metrics[i].append(
+                            {"step": step, "mahalanobis": stats["mahalanobis"][i]}
+                        )
 
             action = postprocessor(action)
 
@@ -347,7 +348,7 @@ def main():
 
             if "final_info" in info:
                 for i, s in enumerate(info["final_info"]["is_success"].tolist()):
-                    if s:
+                    if s and not done[i]:
                         successes[i] = True
 
             done = terminated | truncated | done
