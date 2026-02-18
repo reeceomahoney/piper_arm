@@ -41,6 +41,7 @@ from lerobot.utils.constants import (
     OBS_LANGUAGE_ATTENTION_MASK,
     OBS_LANGUAGE_TOKENS,
 )
+from sklearn.covariance import LedoitWolf
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -106,7 +107,6 @@ def fit_gaussian_from_dataset(
     repo_id: str,
     batch_size: int,
     num_workers: int,
-    reg: float,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Embed the full dataset and return (mean, cov_inv)."""
     device = next(policy.parameters()).device
@@ -135,11 +135,12 @@ def fit_gaussian_from_dataset(
     embeddings = np.concatenate(all_embeddings, axis=0)
     print(f"Embedded {embeddings.shape[0]} frames, dim={embeddings.shape[1]}")
 
-    print("Fitting Gaussian...")
-    mean = embeddings.mean(axis=0)
-    cov = np.cov(embeddings, rowvar=False)
-    cov += reg * np.eye(cov.shape[0])
-    cov_inv = np.linalg.inv(cov)
+    print("Fitting Gaussian (Ledoit-Wolf shrinkage)...")
+    lw = LedoitWolf(assume_centered=False)
+    lw.fit(embeddings)
+    mean = lw.location_
+    cov_inv = lw.precision_
+    print(f"  Ledoit-Wolf shrinkage coefficient: {lw.shrinkage_:.4f}")
 
     return mean, cov_inv
 
@@ -196,15 +197,37 @@ def plot_mahalanobis(results: list[dict], output_dir: Path):
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
+    all_dists = []
     for record in results:
         steps = [t["step"] for t in record["timesteps"]]
         dists = [t["mahalanobis"] for t in record["timesteps"]]
+        all_dists.extend(dists)
         color = "#2ecc71" if record["success"] else "#e74c3c"
         ax.plot(steps, dists, color=color, alpha=0.7, linewidth=1.0)
+
+    if all_dists:
+        p95 = np.percentile(all_dists, 95)
+        p99 = np.percentile(all_dists, 99)
+        ax.axhline(
+            p95,
+            color="#f39c12",
+            linestyle="--",
+            linewidth=1.5,
+            label=f"95th percentile ({p95:.2f})",
+        )
+        ax.axhline(
+            p99,
+            color="#9b59b6",
+            linestyle="--",
+            linewidth=1.5,
+            label=f"99th percentile ({p99:.2f})",
+        )
 
     handles = [
         Line2D([0], [0], color="#2ecc71", label="Success"),
         Line2D([0], [0], color="#e74c3c", label="Failure"),
+        Line2D([0], [0], color="#f39c12", linestyle="--", label="95th percentile"),
+        Line2D([0], [0], color="#9b59b6", linestyle="--", label="99th percentile"),
     ]
     ax.legend(handles=handles, fontsize=8)
     ax.set_xlabel("Timestep")
@@ -239,12 +262,6 @@ def main():
         "--batch-size", type=int, default=32, help="Batch size for dataset embedding"
     )
     parser.add_argument("--num-workers", type=int, default=8)
-    parser.add_argument(
-        "--reg",
-        type=float,
-        default=1e-5,
-        help="Regularization added to covariance diagonal",
-    )
     parser.add_argument(
         "--load-stats",
         type=str,
@@ -283,7 +300,6 @@ def main():
             repo_id=args.repo_id,
             batch_size=args.batch_size,
             num_workers=args.num_workers,
-            reg=args.reg,
         )
 
     timestamp = datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
