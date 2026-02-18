@@ -286,6 +286,8 @@ def main():
         env_cfg, policy_cfg
     )
 
+    envs = make_env(env_cfg, n_envs=args.n_episodes)
+
     # ── Phase 1: Get Gaussian stats ──
     if args.load_stats is not None:
         print(f"Loading cached stats from {args.load_stats}")
@@ -315,8 +317,6 @@ def main():
     print(f"Saved Gaussian stats to {output_dir / 'gauss_stats.npz'}")
 
     # ── Phase 2: Rollout ──
-    envs = make_env(env_cfg, n_envs=args.n_episodes)
-
     results = []
 
     for task_id, vec_env in envs[suite_name].items():
