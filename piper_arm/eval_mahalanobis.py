@@ -407,7 +407,7 @@ def main():
         timestep_metrics = [[] for _ in range(args.n_episodes)]
         done = np.array([False] * args.n_episodes)
 
-        step_bar = tqdm(range(max_steps), desc=f"Task {task_id} steps", leave=False)
+        step_bar = tqdm(range(max_steps), desc=f"Task {task_id + 1} steps", leave=False)
         for step in step_bar:
             if np.all(done):
                 break
