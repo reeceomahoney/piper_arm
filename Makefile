@@ -31,7 +31,7 @@ eval:
 		--policy.path=reece-omahoney/smolvla-libero-256
 
 eval-maha:
-	python piper_arm/eval_mahalanobis.py --n-episodes 5 --intervene --load-stats outputs/eval_mahalanobis/2026-02-18/15-46-41/gauss_stats.npz
+	python piper_arm/eval_mahalanobis.py --n-episodes 5 --intervene --load-stats outputs/eval_mahalanobis/2026-02-19/13-15-11/gauss_stats.npz
 
 ############
 # Hardware #
