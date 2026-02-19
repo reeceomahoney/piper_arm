@@ -7,6 +7,9 @@ From: python:3.10-slim
     README.md /opt/piper_arm/README.md
     piper_arm /opt/piper_arm/piper_arm
 
+    # To get EGL working
+    egl_vendor.d/10_nvidia.json /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+
 %post
     apt-get update && apt-get install -y --no-install-recommends \
         curl ffmpeg libavutil-dev libavcodec-dev libavformat-dev libswscale-dev \
@@ -21,7 +24,8 @@ From: python:3.10-slim
 %environment
     export PATH="/opt/piper_arm/.venv/bin:$PATH"
     export PYTHONDONTWRITEBYTECODE=1
-    export MUJOCO_GL=osmesa
+    export MUJOCO_GL=egl
+    export PYTHONUNBUFFERED=1
     export UV_CACHE_DIR=.cache/uv
     export HF_HOME=.cache/huggingface
     export LIBERO_CONFIG_PATH=.cache/libero

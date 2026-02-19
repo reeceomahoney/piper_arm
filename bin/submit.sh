@@ -11,5 +11,7 @@ set -euo pipefail
 echo "Starting at $(date +%H:%M)"
 
 singularity run \
-  --nv --env "WANDB_API_KEY=${WANDB_API_KEY}" --env "HF_TOKEN=${HF_TOKEN}" \
+  --nv \
+  --env "WANDB_API_KEY=${WANDB_API_KEY}" \
+  --env "HF_TOKEN=${HF_TOKEN}" \
   container.sif make $1

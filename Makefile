@@ -54,6 +54,9 @@ REMOTE_PATH = ${DATA}/piper_arm
 sync:
 	rsync -avz --filter=':- .gitignore' ./ $(REMOTE_HOST):$(REMOTE_PATH)
 
+fetch-eval:
+	rsync -avz $(REMOTE_HOST):$(REMOTE_PATH)/outputs/eval_mahalanobis/ ./outputs/eval_mahalanobis/
+
 submit: sync
 	ssh $(REMOTE_HOST) 'cd $(REMOTE_PATH) && sbatch bin/submit.sh $(CMD)'
 
