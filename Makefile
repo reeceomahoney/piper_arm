@@ -14,7 +14,7 @@ fix-metaworld:
 ############
 
 train:
-	uv run lerobot-train --config_path configs/train.yaml
+	lerobot-train --config_path configs/train.yaml
 
 train-vae:
 	uv run piper_arm/train_vae.py
@@ -29,6 +29,9 @@ finetune:
 eval:
 	uv run lerobot-eval --config_path configs/eval.yaml \
 		--policy.path=reece-omahoney/smolvla-libero-256
+
+eval-maha:
+	python piper_arm/eval_mahalanobis.py --n-episodes 5 --intervene --load-stats outputs/eval_mahalanobis/2026-02-18/15-46-41/gauss_stats.npz
 
 ############
 # Hardware #
@@ -52,7 +55,7 @@ sync:
 	rsync -avz --filter=':- .gitignore' ./ $(REMOTE_HOST):$(REMOTE_PATH)
 
 submit: sync
-	ssh $(REMOTE_HOST) 'cd $(REMOTE_PATH) && sbatch bin/submit.sh'
+	ssh $(REMOTE_HOST) 'cd $(REMOTE_PATH) && sbatch bin/submit.sh $(CMD)'
 
 list:
 	@ssh $(REMOTE_HOST) 'sinfo -N -p short -o "%.20N %.5t %.15C %.10m %.20G" | awk "NR==1 || /h100/ || /l40s/"'
