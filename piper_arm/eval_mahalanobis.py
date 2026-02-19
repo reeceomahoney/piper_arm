@@ -211,7 +211,9 @@ def select_action_with_mahalanobis(
 # ──────────────────────────────────────────────────────────────────────
 
 
-def plot_mahalanobis(results: list[dict], output_dir: Path):
+def plot_mahalanobis(
+    results: list[dict], output_dir: Path, p99_threshold: float | None = None
+):
     """Plot per-timestep Mahalanobis distance for each episode."""
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
@@ -239,29 +241,36 @@ def plot_mahalanobis(results: list[dict], output_dir: Path):
                     iv_steps, iv_dists, color="#e67e22", s=20, zorder=5, linewidths=0
                 )
 
-    if all_dists:
-        p95 = np.percentile(all_dists, 95)
-        p99 = np.percentile(all_dists, 99)
+    if p99_threshold is not None:
         ax.axhline(
-            p95,
-            color="#f39c12",
+            p99_threshold,
+            color="#9b59b6",
             linestyle="--",
             linewidth=1.5,
-            label=f"95th percentile ({p95:.2f})",
+            label=f"Training p99 / intervention threshold ({p99_threshold:.2f})",
         )
+    elif all_dists:
+        p99 = np.percentile(all_dists, 99)
         ax.axhline(
             p99,
             color="#9b59b6",
             linestyle="--",
             linewidth=1.5,
-            label=f"99th percentile ({p99:.2f})",
+            label=f"Rollout 99th percentile ({p99:.2f})",
         )
 
     handles = [
         Line2D([0], [0], color="#2ecc71", label="Success"),
         Line2D([0], [0], color="#e74c3c", label="Failure"),
-        Line2D([0], [0], color="#f39c12", linestyle="--", label="95th percentile"),
-        Line2D([0], [0], color="#9b59b6", linestyle="--", label="99th percentile"),
+        Line2D(
+            [0],
+            [0],
+            color="#9b59b6",
+            linestyle="--",
+            label="Training p99 threshold"
+            if p99_threshold is not None
+            else "Rollout 99th percentile",
+        ),
     ]
     if has_interventions:
         handles.append(
@@ -387,7 +396,7 @@ def main():
     for task_id, vec_env in envs[suite_name].items():
         task_desc = vec_env.call("task_description")[0]
         n_tasks = len(envs[suite_name])
-        print(f"\n=== Task {task_id}/{n_tasks}: {task_desc} ===")
+        print(f"\n=== Task {task_id + 1}/{n_tasks}: {task_desc} ===")
 
         max_steps = vec_env.call("_max_episode_steps")[0]
         seeds = list(range(args.n_episodes))
@@ -398,7 +407,8 @@ def main():
         timestep_metrics = [[] for _ in range(args.n_episodes)]
         done = np.array([False] * args.n_episodes)
 
-        for step in range(max_steps):
+        step_bar = tqdm(range(max_steps), desc=f"Task {task_id} steps", leave=False)
+        for step in step_bar:
             if np.all(done):
                 break
 
@@ -418,6 +428,11 @@ def main():
                 )
 
             if stats is not None:
+                mean_dist = np.mean(stats["mahalanobis"])
+                postfix = {"maha": f"{mean_dist:.2f}"}
+                if args.intervene:
+                    postfix["ood"] = stats["intervention"]
+                step_bar.set_postfix(postfix)
                 for i in range(args.n_episodes):
                     if not done[i]:
                         entry = {
@@ -490,7 +505,7 @@ def main():
     )
 
     # Plot
-    plot_mahalanobis(results, output_dir)
+    plot_mahalanobis(results, output_dir, p99_threshold=gauss_p99)
 
 
 if __name__ == "__main__":
