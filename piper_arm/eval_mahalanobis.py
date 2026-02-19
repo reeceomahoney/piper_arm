@@ -2,16 +2,15 @@
 
 Phase 1: Embed the entire training dataset to fit a Gaussian (mean + covariance)
           over the VLM prefix representations. These stats can be cached to disk.
-          The p99 Mahalanobis distance over training data is also computed and stored
-          as the intervention threshold.
 
 Phase 2: Roll out the policy in LIBERO and at each timestep compute the VLM
           prefix embedding and its Mahalanobis distance from the training
           distribution. Plot the distance over each trajectory.
 
-          With --intervene: when the current distance exceeds the training p99,
-          the action chunk is reduced to a single step so the policy re-evaluates
-          at every subsequent timestep until it returns to in-distribution.
+          With --intervene: when the moving average of distances exceeds
+          INTERVENTION_K times the baseline (mean of the first MA_WINDOW
+          forward-pass distances), the action chunk is reduced to a single step
+          so the policy re-evaluates at every subsequent timestep.
 
 Usage:
     # Full run (embed dataset + rollout):
@@ -108,13 +107,9 @@ def compute_mahalanobis_np(
 
 
 def fit_gaussian_from_dataset(
-    policy: SmolVLAPolicy,
-    preprocessor,
-    repo_id: str,
-    batch_size: int,
-    num_workers: int,
-) -> tuple[np.ndarray, np.ndarray, float]:
-    """Embed the full dataset and return (mean, cov_inv, p99_threshold)."""
+    policy: SmolVLAPolicy, preprocessor, repo_id: str, batch_size: int, num_workers: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Embed the full dataset and return (mean, cov_inv)."""
     device = next(policy.parameters()).device
 
     print(f"Loading dataset: {repo_id}")
@@ -148,16 +143,16 @@ def fit_gaussian_from_dataset(
     cov_inv = lw.precision_
     print(f"  Ledoit-Wolf shrinkage coefficient: {lw.shrinkage_:.4f}")
 
-    train_dists = compute_mahalanobis_np(embeddings, mean, cov_inv)
-    p99_threshold = float(np.percentile(train_dists, 99))
-    print(f"  Training p99 Mahalanobis distance: {p99_threshold:.4f}")
-
-    return mean, cov_inv, p99_threshold
+    return mean, cov_inv
 
 
 # ──────────────────────────────────────────────────────────────────────
 # Phase 2: Rollout with Mahalanobis tracking
 # ──────────────────────────────────────────────────────────────────────
+
+
+MA_WINDOW = 10
+INTERVENTION_K = 1.1
 
 
 @torch.no_grad()
@@ -166,14 +161,19 @@ def select_action_with_mahalanobis(
     batch: dict,
     gauss_mean: np.ndarray,
     gauss_cov_inv: np.ndarray,
-    p99_threshold: float | None = None,
+    dist_histories: list[list[float]],
     intervene: bool = False,
 ) -> tuple[torch.Tensor, dict | None]:
     """Like select_action but also returns Mahalanobis distance of the current obs.
 
-    When intervene=True and p99_threshold is set, reduces the action chunk to a
-    single step when OOD (distance > p99_threshold), forcing the policy to
-    re-evaluate at every subsequent timestep until it returns in-distribution.
+    When intervene=True, reduces the action chunk to a single step when the
+    per-episode moving average of distances exceeds INTERVENTION_K times the
+    baseline (mean of the first MA_WINDOW forward-pass distances),
+    forcing the policy to re-evaluate every timestep until it settles back down.
+
+    Args:
+        dist_histories: Per-episode list of distances from forward passes so far
+                        this episode. Updated in-place. Reset between episodes.
 
     Returns:
         action: Single action tensor for env stepping.
@@ -191,9 +191,21 @@ def select_action_with_mahalanobis(
         emb_np = emb.cpu().numpy()
         dist = compute_mahalanobis_np(emb_np, gauss_mean, gauss_cov_inv)
 
-        ood = bool(
-            intervene and p99_threshold is not None and np.mean(dist) > p99_threshold
-        )
+        # Update per-episode histories
+        for i, d in enumerate(dist.tolist()):
+            dist_histories[i].append(d)
+
+        # Intervene if any episode's moving average has risen k× above its baseline
+        ood = False
+        if intervene:
+            for history in dist_histories:
+                if len(history) >= MA_WINDOW:
+                    baseline = np.mean(history[:MA_WINDOW])
+                    current_ma = np.mean(history[-MA_WINDOW:])
+                    if current_ma > INTERVENTION_K * baseline:
+                        ood = True
+                        break
+
         stats = {"mahalanobis": dist.tolist(), "intervention": ood}
 
         # Generate action chunk; if OOD, only use first action so we re-evaluate
@@ -211,82 +223,72 @@ def select_action_with_mahalanobis(
 # ──────────────────────────────────────────────────────────────────────
 
 
-def plot_mahalanobis(
-    results: list[dict], output_dir: Path, p99_threshold: float | None = None
-):
-    """Plot per-timestep Mahalanobis distance for each episode."""
+def plot_mahalanobis(results: list[dict], output_dir: Path):
+    """Plot per-timestep Mahalanobis distance (moving average) for each episode."""
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    all_dists = []
     has_interventions = any(
-        any("intervention" in t for t in record["timesteps"]) for record in results
+        any(t.get("intervention") for t in record["timesteps"]) for record in results
     )
     for record in results:
-        steps = [t["step"] for t in record["timesteps"]]
-        dists = [t["mahalanobis"] for t in record["timesteps"]]
-        all_dists.extend(dists)
+        steps = np.array([t["step"] for t in record["timesteps"]])
+        dists = np.array([t["mahalanobis"] for t in record["timesteps"]])
         color = "#2ecc71" if record["success"] else "#e74c3c"
-        ax.plot(steps, dists, color=color, alpha=0.7, linewidth=1.0)
 
-        if has_interventions:
-            iv_steps = [t["step"] for t in record["timesteps"] if t.get("intervention")]
-            iv_dists = [
-                t["mahalanobis"] for t in record["timesteps"] if t.get("intervention")
-            ]
-            if iv_steps:
-                ax.scatter(
-                    iv_steps, iv_dists, color="#e67e22", s=20, zorder=5, linewidths=0
-                )
+        if len(dists) >= MA_WINDOW:
+            kernel = np.ones(MA_WINDOW) / MA_WINDOW
+            ma_dists = np.convolve(dists, kernel, mode="valid")
+            ma_steps = steps[MA_WINDOW - 1 :]
+        else:
+            ma_dists = dists
+            ma_steps = steps
 
-    if p99_threshold is not None:
-        ax.axhline(
-            p99_threshold,
-            color="#9b59b6",
-            linestyle="--",
-            linewidth=1.5,
-            label=f"Training p99 / intervention threshold ({p99_threshold:.2f})",
+        # Find first intervention index in original timestep array
+        first_iv_idx = next(
+            (i for i, t in enumerate(record["timesteps"]) if t.get("intervention")),
+            None,
         )
-    elif all_dists:
-        p99 = np.percentile(all_dists, 99)
-        ax.axhline(
-            p99,
-            color="#9b59b6",
-            linestyle="--",
-            linewidth=1.5,
-            label=f"Rollout 99th percentile ({p99:.2f})",
-        )
+        if first_iv_idx is not None:
+            split = max(0, first_iv_idx - MA_WINDOW + 1)
+            ax.plot(
+                ma_steps[: split + 1],
+                ma_dists[: split + 1],
+                color=color,
+                alpha=0.7,
+                linewidth=1.0,
+            )
+            ax.plot(
+                ma_steps[split:],
+                ma_dists[split:],
+                color=color,
+                alpha=0.7,
+                linewidth=1.0,
+                linestyle=":",
+            )
+        else:
+            ax.plot(ma_steps, ma_dists, color=color, alpha=0.7, linewidth=1.0)
 
     handles = [
         Line2D([0], [0], color="#2ecc71", label="Success"),
         Line2D([0], [0], color="#e74c3c", label="Failure"),
-        Line2D(
-            [0],
-            [0],
-            color="#9b59b6",
-            linestyle="--",
-            label="Training p99 threshold"
-            if p99_threshold is not None
-            else "Rollout 99th percentile",
-        ),
     ]
     if has_interventions:
         handles.append(
             Line2D(
                 [0],
                 [0],
-                marker="o",
-                color="w",
-                markerfacecolor="#e67e22",
-                markersize=5,
-                label="Intervention",
+                color="gray",
+                linestyle=":",
+                linewidth=1.0,
+                label="Intervening",
             )
         )
     ax.legend(handles=handles, fontsize=8)
     ax.set_xlabel("Timestep")
-    ax.set_ylabel("Mahalanobis Distance")
+    ax.set_ylabel(f"Mahalanobis Distance (moving avg, window={MA_WINDOW})")
     ax.set_title("Mahalanobis Distance of VLM Prefix Embeddings During Rollout")
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -327,9 +329,9 @@ def main():
         "--intervene",
         action="store_true",
         help=(
-            "When set, reduce action chunk to 1 step whenever the Mahalanobis "
-            "distance exceeds the training p99 threshold, forcing the policy to "
-            "re-evaluate every timestep until it returns in-distribution."
+            "When set, reduce action chunk to 1 step whenever the moving average of "
+            "Mahalanobis distances exceeds INTERVENTION_K times the baseline, forcing "
+            "the policy to re-evaluate every timestep until it returns in-distribution."
         ),
     )
     args = parser.parse_args()
@@ -358,14 +360,9 @@ def main():
         data = np.load(args.load_stats)
         gauss_mean = data["mean"]
         gauss_cov_inv = data["cov_inv"]
-        gauss_p99 = float(data["p99"]) if "p99" in data else None
         print(f"Loaded Gaussian stats, dim={gauss_mean.shape[0]}")
-        if gauss_p99 is not None:
-            print(f"  Loaded training p99 threshold: {gauss_p99:.4f}")
-        else:
-            print("  Warning: no p99 in cached stats; --intervene will be disabled.")
     else:
-        gauss_mean, gauss_cov_inv, gauss_p99 = fit_gaussian_from_dataset(
+        gauss_mean, gauss_cov_inv = fit_gaussian_from_dataset(
             policy=policy,
             preprocessor=preprocessor,
             repo_id=args.repo_id,
@@ -373,21 +370,12 @@ def main():
             num_workers=args.num_workers,
         )
 
-    if args.intervene and gauss_p99 is None:
-        print(
-            "Warning: --intervene requested but p99 threshold unavailable; disabling."
-        )
-        args.intervene = False
-
     timestamp = datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
     output_dir = Path(f"outputs/eval_mahalanobis/{timestamp}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Save Gaussian stats for reuse
-    save_kwargs = dict(mean=gauss_mean, cov_inv=gauss_cov_inv)
-    if gauss_p99 is not None:
-        save_kwargs["p99"] = np.array(gauss_p99)
-    np.savez(output_dir / "gauss_stats.npz", **save_kwargs)
+    np.savez(output_dir / "gauss_stats.npz", mean=gauss_mean, cov_inv=gauss_cov_inv)
     print(f"Saved Gaussian stats to {output_dir / 'gauss_stats.npz'}")
 
     # ── Phase 2: Rollout ──
@@ -405,10 +393,10 @@ def main():
         policy.reset()
         successes = [False] * args.n_episodes
         timestep_metrics = [[] for _ in range(args.n_episodes)]
+        dist_histories = [[] for _ in range(args.n_episodes)]
         done = np.array([False] * args.n_episodes)
 
-        step_bar = tqdm(range(max_steps), desc=f"Task {task_id + 1} steps", leave=False)
-        for step in step_bar:
+        for step in tqdm(range(max_steps), leave=False):
             if np.all(done):
                 break
 
@@ -423,16 +411,11 @@ def main():
                     observation,
                     gauss_mean,
                     gauss_cov_inv,
-                    p99_threshold=gauss_p99,
+                    dist_histories=dist_histories,
                     intervene=args.intervene,
                 )
 
             if stats is not None:
-                mean_dist = np.mean(stats["mahalanobis"])
-                postfix = {"maha": f"{mean_dist:.2f}"}
-                if args.intervene:
-                    postfix["ood"] = stats["intervention"]
-                step_bar.set_postfix(postfix)
                 for i in range(args.n_episodes):
                     if not done[i]:
                         entry = {
@@ -505,7 +488,7 @@ def main():
     )
 
     # Plot
-    plot_mahalanobis(results, output_dir, p99_threshold=gauss_p99)
+    plot_mahalanobis(results, output_dir)
 
 
 if __name__ == "__main__":
