@@ -162,6 +162,7 @@ def select_action_with_mahalanobis(
     gauss_mean: np.ndarray,
     gauss_cov_inv: np.ndarray,
     dist_histories: list[list[float]],
+    done: np.ndarray,
     intervene: bool = False,
 ) -> tuple[torch.Tensor, dict | None]:
     """Like select_action but also returns Mahalanobis distance of the current obs.
@@ -191,9 +192,10 @@ def select_action_with_mahalanobis(
         emb_np = emb.cpu().numpy()
         dist = compute_mahalanobis_np(emb_np, gauss_mean, gauss_cov_inv)
 
-        # Update per-episode histories
+        # Update per-episode histories (skip done episodes)
         for i, d in enumerate(dist.tolist()):
-            dist_histories[i].append(d)
+            if not done[i]:
+                dist_histories[i].append(d)
 
         # Intervene if any episode's moving average has risen k× above its baseline
         ood = False
@@ -211,7 +213,8 @@ def select_action_with_mahalanobis(
         # Generate action chunk; if OOD, only use first action so we re-evaluate
         # on the very next step instead of committing to a full chunk.
         action_chunk = policy._get_action_chunk(batch)
-        n_steps = 1 if ood else policy.config.n_action_steps
+        # n_steps = 1 if ood else policy.config.n_action_steps
+        n_steps = policy.config.n_action_steps
         policy._queues[ACTION].extend(action_chunk.transpose(0, 1)[:n_steps])
 
     action = policy._queues[ACTION].popleft()
@@ -412,6 +415,7 @@ def main():
                     gauss_mean,
                     gauss_cov_inv,
                     dist_histories=dist_histories,
+                    done=done,
                     intervene=args.intervene,
                 )
 
@@ -486,6 +490,28 @@ def main():
         f"Mean Mahalanobis distance: "
         f"{np.mean([r['mean_mahalanobis'] for r in results]):.4f}"
     )
+    if args.intervene:
+        # False positives
+        total_interventions = sum(r["n_interventions"] for r in results)
+        success_interventions = sum(
+            r["n_interventions"] for r in results if r["success"]
+        )
+        print(
+            f"Interventions on successful episodes: "
+            f"{success_interventions}/{total_interventions} "
+            f"({100 * success_interventions / total_interventions:.1f}%)"
+        )
+
+        # False negatives
+        failed_no_intervention = sum(
+            1 for r in results if not r["success"] and r["n_interventions"] == 0
+        )
+        n_failed = sum(1 for r in results if not r["success"])
+        print(
+            f"Unsuccessful episodes with no intervention: "
+            f"{failed_no_intervention}/{n_failed} "
+            f"({100 * failed_no_intervention / n_failed:.1f}%)"
+        )
 
     # Plot
     plot_mahalanobis(results, output_dir)
