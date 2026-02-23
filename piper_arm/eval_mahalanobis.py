@@ -38,7 +38,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Optional, Union, cast
 
 import draccus
 import numpy as np
@@ -107,7 +107,7 @@ def _embed_prefix_pi05(policy: PI05Policy, batch: dict):
         images, img_masks, lang_tokens, lang_masks
     )
     prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
-    prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+    prefix_position_ids: torch.LongTensor = torch.cumsum(prefix_pad_masks, dim=1) - 1  # type: ignore[assignment]
 
     prefix_att_2d_masks_4d = model._prepare_attention_masks_4d(prefix_att_2d_masks)
     prefix_att_2d_masks_4d = prefix_att_2d_masks_4d.to(dtype=prefix_embs.dtype)
@@ -116,7 +116,7 @@ def _embed_prefix_pi05(policy: PI05Policy, batch: dict):
         attention_mask=prefix_att_2d_masks_4d,
         position_ids=prefix_position_ids,
         past_key_values=None,
-        inputs_embeds=[prefix_embs, None],
+        inputs_embeds=cast(list[torch.FloatTensor], [prefix_embs, None]),
         use_cache=False,
     )
     return prefix_out, prefix_pad_masks
@@ -134,13 +134,13 @@ def _embed_prefix_smolvla(policy: SmolVLAPolicy, batch: dict):
         images, img_masks, lang_tokens, lang_masks, state=state
     )
     prefix_att_2d_masks = smolvla_make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
-    prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+    prefix_position_ids: torch.LongTensor = torch.cumsum(prefix_pad_masks, dim=1) - 1  # type: ignore[assignment]
 
     (prefix_out, _), _ = model.vlm_with_expert.forward(
         attention_mask=prefix_att_2d_masks,
         position_ids=prefix_position_ids,
         past_key_values=None,
-        inputs_embeds=[prefix_embs, None],
+        inputs_embeds=cast(list[torch.FloatTensor], [prefix_embs, None]),
         use_cache=False,
         fill_kv_cache=True,
     )
@@ -163,7 +163,7 @@ def compute_mahalanobis_np(
 
 def fit_gaussian_from_dataset(
     policy: Union[PI05Policy, SmolVLAPolicy],
-    preprocessor,
+    preprocessor: Any,
     dataset: str,
     batch_size: int,
     num_workers: int,
@@ -172,9 +172,9 @@ def fit_gaussian_from_dataset(
     device = next(policy.parameters()).device
 
     print(f"Loading dataset: {dataset}")
-    dataset = LeRobotDataset(repo_id=dataset)
+    lerobot_dataset = LeRobotDataset(repo_id=dataset)
     dataloader = DataLoader(
-        dataset,
+        lerobot_dataset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
@@ -198,8 +198,8 @@ def fit_gaussian_from_dataset(
     print("Fitting Gaussian (Ledoit-Wolf shrinkage)...")
     lw = LedoitWolf(assume_centered=False)
     lw.fit(embeddings)
-    mean = lw.location_
-    cov_inv = lw.precision_
+    mean: np.ndarray = lw.location_
+    cov_inv: np.ndarray = lw.precision_  # type: ignore[assignment]
     print(f"  Ledoit-Wolf shrinkage coefficient: {lw.shrinkage_:.4f}")
 
     return mean, cov_inv
@@ -387,7 +387,7 @@ class EvalMahalanobisConfig:
     intervene: bool = False
 
 
-@draccus.wrap()
+@draccus.wrap()  # type: ignore[misc]
 def main(cfg: EvalMahalanobisConfig):
     # ── Load policy ──
     suite_name = "libero_10"
@@ -397,11 +397,13 @@ def main(cfg: EvalMahalanobisConfig):
 
     envs = make_env(env_cfg, n_envs=cfg.n_episodes)
 
-    policy = make_policy(cfg=policy_cfg, env_cfg=env_cfg)
+    policy = cast(
+        Union[PI05Policy, SmolVLAPolicy], make_policy(cfg=policy_cfg, env_cfg=env_cfg)
+    )
     policy.eval()
 
     preprocessor, postprocessor = make_pre_post_processors(
-        policy_cfg=policy_cfg, pretrained_path=policy_cfg.pretrained_path
+        policy_cfg=policy_cfg, pretrained_path=str(policy_cfg.pretrained_path)
     )
     env_preprocessor, env_postprocessor = make_env_pre_post_processors(
         env_cfg, policy_cfg
@@ -435,19 +437,22 @@ def main(cfg: EvalMahalanobisConfig):
     results = []
 
     for task_id, vec_env in envs[suite_name].items():
-        task_desc = vec_env.call("task_description")[0]
+        task_desc = vec_env.call("task_description")[0]  # type: ignore[attr-defined]
         n_tasks = len(envs[suite_name])
         print(f"\n=== Task {task_id + 1}/{n_tasks}: {task_desc} ===")
 
-        max_steps = vec_env.call("_max_episode_steps")[0]
+        max_steps = vec_env.call("_max_episode_steps")[0]  # type: ignore[attr-defined]
         seeds = list(range(cfg.n_episodes))
 
-        observation, info = vec_env.reset(seed=seeds)
+        observation, info = vec_env.reset(seed=seeds)  # type: ignore[arg-type]
         policy.reset()
         successes = [False] * cfg.n_episodes
-        timestep_metrics = [[] for _ in range(cfg.n_episodes)]
-        dist_histories = [[] for _ in range(cfg.n_episodes)]
+        timestep_metrics: list[list[dict[str, Any]]] = [
+            [] for _ in range(cfg.n_episodes)
+        ]
+        dist_histories: list[list[float]] = [[] for _ in range(cfg.n_episodes)]
         done = np.array([False] * cfg.n_episodes)
+        step = 0
 
         for step in tqdm(range(max_steps), leave=False):
             if np.all(done):
@@ -486,7 +491,7 @@ def main(cfg: EvalMahalanobisConfig):
             action_transition = env_postprocessor(action_transition)
             action_np = action_transition[ACTION].to("cpu").numpy()
 
-            observation, reward, terminated, truncated, info = vec_env.step(action_np)
+            observation, _, terminated, truncated, info = vec_env.step(action_np)
 
             if "final_info" in info:
                 for i, s in enumerate(info["final_info"]["is_success"].tolist()):
@@ -568,4 +573,4 @@ def main(cfg: EvalMahalanobisConfig):
 
 
 if __name__ == "__main__":
-    main()
+    main()  # type: ignore[call-arg]
