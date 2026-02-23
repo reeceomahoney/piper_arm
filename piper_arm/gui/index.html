@@ -12,45 +12,56 @@
   </head>
   <body>
     <h1>SLURM Monitor</h1>
-    <div class="grid">
-      <div class="card">
-        <h2>Nodes</h2>
-        <div hx-get="/nodes" hx-trigger="load, every 30s" hx-swap="innerHTML">
-          Loading...
-        </div>
-      </div>
-      <div class="card">
-        <h2>Jobs</h2>
-        <div hx-get="/jobs" hx-trigger="load, every 10s" hx-swap="innerHTML">
-          Loading...
-        </div>
-      </div>
-      <div class="card full" id="log-panel" style="display: none">
-        <div class="log-header">
-          <h2 id="log-title">Logs</h2>
-          <button
-            class="btn"
-            onclick="
-              document.getElementById('log-panel').style.display = 'none';
-              document.getElementById('log-stream').removeAttribute('hx-ext');
-              document.getElementById('log-stream').innerHTML = '';
-            "
+
+    <div class="layout">
+      <div class="left">
+        <div class="card left-top">
+          <h2>Jobs</h2>
+          <div
+            hx-get="/jobs"
+            hx-trigger="load, every 10s"
+            hx-swap="innerHTML"
           >
-            Close
-          </button>
+            Loading...
+          </div>
         </div>
-        <pre class="log" id="log-stream"></pre>
+        <div class="card left-bottom">
+          <h2>Nodes</h2>
+          <div
+            hx-get="/nodes"
+            hx-trigger="load, every 30s"
+            hx-swap="innerHTML"
+          >
+            Loading...
+          </div>
+        </div>
+      </div>
+      <div class="card right" id="log-panel">
+        <div class="log-placeholder" id="log-placeholder">
+          Select a running job to view logs
+        </div>
+        <div id="log-content" style="display: none">
+          <div class="log-header">
+            <h2 id="log-title">Logs</h2>
+            <button class="btn" onclick="closeLog()">Close</button>
+          </div>
+          <pre class="log" id="log-stream"></pre>
+        </div>
       </div>
     </div>
+
     <script>
       function openLog(jobId) {
-        const panel = document.getElementById("log-panel");
-        const stream = document.getElementById("log-stream");
-        const title = document.getElementById("log-title");
-        panel.style.display = "block";
-        title.textContent = "Logs — Job " + jobId;
+        var placeholder = document.getElementById("log-placeholder");
+        var content = document.getElementById("log-content");
+        var stream = document.getElementById("log-stream");
+        var title = document.getElementById("log-title");
+        placeholder.style.display = "none";
+        content.style.display = "flex";
+        title.textContent = "Job " + jobId;
         stream.innerHTML = "";
-        const evtSource = new EventSource("/logs/" + jobId);
+        if (window._logSource) window._logSource.close();
+        var evtSource = new EventSource("/logs/" + jobId);
         evtSource.onmessage = function (e) {
           stream.textContent += e.data + "\n";
           stream.scrollTop = stream.scrollHeight;
@@ -58,12 +69,17 @@
         evtSource.onerror = function () {
           evtSource.close();
         };
-        if (window._logSource) window._logSource.close();
         window._logSource = evtSource;
+      }
+      function closeLog() {
+        if (window._logSource) window._logSource.close();
+        document.getElementById("log-content").style.display = "none";
+        document.getElementById("log-placeholder").style.display = "flex";
+        document.getElementById("log-stream").innerHTML = "";
       }
       function cancelJob(jobId) {
         if (!confirm("Cancel job " + jobId + "?")) return;
-        fetch("/cancel/" + jobId, { method: "POST" }).then(() => {
+        fetch("/cancel/" + jobId, { method: "POST" }).then(function () {
           htmx.ajax("GET", "/jobs", {
             target: '[hx-get="/jobs"]',
             swap: "innerHTML",

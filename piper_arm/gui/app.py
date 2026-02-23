@@ -111,7 +111,7 @@ def logs(job_id):
 
     def stream():
         proc = subprocess.Popen(
-            ["ssh", REMOTE_HOST, f"tail -n 80 -f {REMOTE_PATH}/slurm-{job_id}.out"],
+            ["ssh", REMOTE_HOST, f"tail -n +1 -f {REMOTE_PATH}/slurm-{job_id}.out"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
