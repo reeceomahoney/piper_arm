@@ -86,7 +86,7 @@ clean-logs:
 		fi'
 
 gui:
-	uv run --extra monitor python piper_arm/gui/app.py
+	uv run --extra gui piper_arm/gui/app.py
 
 ###############
 # Singularity #
