@@ -34,13 +34,13 @@ Usage:
         --n-episodes 1
 """
 
-from __future__ import annotations
-
-import argparse
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, Union
 
+import draccus
 import numpy as np
 import torch
 from lerobot.configs.policies import PreTrainedConfig
@@ -72,7 +72,7 @@ from tqdm import tqdm
 
 @torch.no_grad()
 def embed_prefix_pooled(
-    policy: PI05Policy | SmolVLAPolicy, batch: dict
+    policy: Union[PI05Policy, SmolVLAPolicy], batch: dict
 ) -> torch.Tensor:
     """Run a batch through the VLM prefix and return mean-pooled embeddings.
 
@@ -162,17 +162,17 @@ def compute_mahalanobis_np(
 
 
 def fit_gaussian_from_dataset(
-    policy: PI05Policy | SmolVLAPolicy,
+    policy: Union[PI05Policy, SmolVLAPolicy],
     preprocessor,
-    repo_id: str,
+    dataset: str,
     batch_size: int,
     num_workers: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Embed the full dataset and return (mean, cov_inv)."""
     device = next(policy.parameters()).device
 
-    print(f"Loading dataset: {repo_id}")
-    dataset = LeRobotDataset(repo_id=repo_id)
+    print(f"Loading dataset: {dataset}")
+    dataset = LeRobotDataset(repo_id=dataset)
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -214,7 +214,7 @@ MA_WINDOW = 10
 INTERVENTION_K = 1.1
 
 
-def _get_action_queue(policy: PI05Policy | SmolVLAPolicy):
+def _get_action_queue(policy: Union[PI05Policy, SmolVLAPolicy]):
     """Return the action deque for the given policy type."""
     if isinstance(policy, PI05Policy):
         return policy._action_queue
@@ -225,7 +225,7 @@ def _get_action_queue(policy: PI05Policy | SmolVLAPolicy):
 
 @torch.no_grad()
 def select_action_with_mahalanobis(
-    policy: PI05Policy | SmolVLAPolicy,
+    policy: Union[PI05Policy, SmolVLAPolicy],
     batch: dict,
     gauss_mean: np.ndarray,
     gauss_cov_inv: np.ndarray,
@@ -375,46 +375,27 @@ def plot_mahalanobis(results: list[dict], output_dir: Path):
 # ──────────────────────────────────────────────────────────────────────
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Rollout with Mahalanobis distance tracking of VLM embeddings"
-    )
-    parser.add_argument(
-        "--policy-path",
-        type=str,
-        default="reece-omahoney/smolvla-libero-256",
-        # default="lerobot/pi05_libero_finetuned",
-    )
-    parser.add_argument("--repo-id", type=str, default="reece-omahoney/libero")
-    parser.add_argument("--n-episodes", type=int, default=1, help="Episodes per task")
-    parser.add_argument(
-        "--batch-size", type=int, default=32, help="Batch size for dataset embedding"
-    )
-    parser.add_argument("--num-workers", type=int, default=8)
-    parser.add_argument(
-        "--load-stats",
-        type=str,
-        default=None,
-        help="Path to gauss_stats.npz from a previous run. Skips dataset embedding.",
-    )
-    parser.add_argument(
-        "--intervene",
-        action="store_true",
-        help=(
-            "When set, reduce action chunk to 1 step whenever the moving average of "
-            "Mahalanobis distances exceeds INTERVENTION_K times the baseline, forcing "
-            "the policy to re-evaluate every timestep until it returns in-distribution."
-        ),
-    )
-    args = parser.parse_args()
+@dataclass
+class EvalMahalanobisConfig:
+    policy_path: str = "reece-omahoney/smolvla-libero-256"
+    # policy_path: str = "lerobot/pi05_libero_finetuned"
+    dataset: str = "reece-omahoney/libero"
+    n_episodes: int = 1
+    batch_size: int = 32
+    num_workers: int = 8
+    load_stats: Optional[str] = None
+    intervene: bool = False
 
+
+@draccus.wrap()
+def main(cfg: EvalMahalanobisConfig):
     # ── Load policy ──
     suite_name = "libero_10"
     env_cfg = LiberoEnvConfig(suite_name, fps=10)
-    policy_cfg = PreTrainedConfig.from_pretrained(args.policy_path)
-    policy_cfg.pretrained_path = Path(args.policy_path)
+    policy_cfg = PreTrainedConfig.from_pretrained(cfg.policy_path)
+    policy_cfg.pretrained_path = Path(cfg.policy_path)
 
-    envs = make_env(env_cfg, n_envs=args.n_episodes)
+    envs = make_env(env_cfg, n_envs=cfg.n_episodes)
 
     policy = make_policy(cfg=policy_cfg, env_cfg=env_cfg)
     policy.eval()
@@ -427,9 +408,9 @@ def main():
     )
 
     # ── Phase 1: Get Gaussian stats ──
-    if args.load_stats is not None:
-        print(f"Loading cached stats from {args.load_stats}")
-        data = np.load(args.load_stats)
+    if cfg.load_stats is not None:
+        print(f"Loading cached stats from {cfg.load_stats}")
+        data = np.load(cfg.load_stats)
         gauss_mean = data["mean"]
         gauss_cov_inv = data["cov_inv"]
         print(f"Loaded Gaussian stats, dim={gauss_mean.shape[0]}")
@@ -437,9 +418,9 @@ def main():
         gauss_mean, gauss_cov_inv = fit_gaussian_from_dataset(
             policy=policy,
             preprocessor=preprocessor,
-            repo_id=args.repo_id,
-            batch_size=args.batch_size,
-            num_workers=args.num_workers,
+            dataset=cfg.dataset,
+            batch_size=cfg.batch_size,
+            num_workers=cfg.num_workers,
         )
 
     timestamp = datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
@@ -459,14 +440,14 @@ def main():
         print(f"\n=== Task {task_id + 1}/{n_tasks}: {task_desc} ===")
 
         max_steps = vec_env.call("_max_episode_steps")[0]
-        seeds = list(range(args.n_episodes))
+        seeds = list(range(cfg.n_episodes))
 
         observation, info = vec_env.reset(seed=seeds)
         policy.reset()
-        successes = [False] * args.n_episodes
-        timestep_metrics = [[] for _ in range(args.n_episodes)]
-        dist_histories = [[] for _ in range(args.n_episodes)]
-        done = np.array([False] * args.n_episodes)
+        successes = [False] * cfg.n_episodes
+        timestep_metrics = [[] for _ in range(cfg.n_episodes)]
+        dist_histories = [[] for _ in range(cfg.n_episodes)]
+        done = np.array([False] * cfg.n_episodes)
 
         for step in tqdm(range(max_steps), leave=False):
             if np.all(done):
@@ -485,17 +466,17 @@ def main():
                     gauss_cov_inv,
                     dist_histories=dist_histories,
                     done=done,
-                    intervene=args.intervene,
+                    intervene=cfg.intervene,
                 )
 
             if stats is not None:
-                for i in range(args.n_episodes):
+                for i in range(cfg.n_episodes):
                     if not done[i]:
                         entry = {
                             "step": step,
                             "mahalanobis": stats["mahalanobis"][i],
                         }
-                        if args.intervene:
+                        if cfg.intervene:
                             entry["intervention"] = stats["intervention"]
                         timestep_metrics[i].append(entry)
 
@@ -514,7 +495,7 @@ def main():
 
             done = terminated | truncated | done
 
-        for ep in range(args.n_episodes):
+        for ep in range(cfg.n_episodes):
             if timestep_metrics[ep]:
                 mean_dist = np.mean([m["mahalanobis"] for m in timestep_metrics[ep]])
                 n_interventions = sum(
@@ -540,7 +521,7 @@ def main():
                 f"  Episode {ep}: {step + 1} steps, success={successes[ep]}, "
                 f"mean_mahalanobis={mean_dist:.4f}"
             )
-            if args.intervene:
+            if cfg.intervene:
                 msg += f", interventions={n_interventions}"
             print(msg)
 
@@ -559,7 +540,7 @@ def main():
         f"Mean Mahalanobis distance: "
         f"{np.mean([r['mean_mahalanobis'] for r in results]):.4f}"
     )
-    if args.intervene:
+    if cfg.intervene:
         # False positives
         total_interventions = sum(r["n_interventions"] for r in results)
         success_interventions = sum(
