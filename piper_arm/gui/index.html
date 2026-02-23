@@ -3,7 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <title>SLURM Monitor</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖥️</text></svg>">
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖥️</text></svg>"
+    />
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='style.css') }}"
@@ -19,21 +22,13 @@
       <div class="left">
         <div class="card left-top">
           <h2>Jobs</h2>
-          <div
-            hx-get="/jobs"
-            hx-trigger="load, every 10s"
-            hx-swap="innerHTML"
-          >
+          <div hx-get="/jobs" hx-trigger="load, every 10s" hx-swap="innerHTML">
             Loading...
           </div>
         </div>
         <div class="card left-bottom">
           <h2>Nodes</h2>
-          <div
-            hx-get="/nodes"
-            hx-trigger="load, every 30s"
-            hx-swap="innerHTML"
-          >
+          <div hx-get="/nodes" hx-trigger="load, every 30s" hx-swap="innerHTML">
             Loading...
           </div>
         </div>
@@ -65,7 +60,9 @@
           $s.append(document.createTextNode(e.data + "\n"));
           $s.scrollTop($s[0].scrollHeight);
         };
-        _src.onerror = function () { _src.close(); };
+        _src.onerror = function () {
+          _src.close();
+        };
       }
       function closeLog() {
         if (_src) _src.close();
@@ -76,7 +73,10 @@
       function cancelJob(id) {
         if (!confirm("Cancel job " + id + "?")) return;
         $.post("/cancel/" + id).then(function () {
-          htmx.ajax("GET", "/jobs", { target: '[hx-get="/jobs"]', swap: "innerHTML" });
+          htmx.ajax("GET", "/jobs", {
+            target: '[hx-get="/jobs"]',
+            swap: "innerHTML",
+          });
         });
       }
     </script>
