@@ -397,9 +397,8 @@ def main(cfg: EvalMahalanobisConfig):
 
     envs = make_env(env_cfg, n_envs=cfg.n_episodes)
 
-    policy = cast(
-        Union[PI05Policy, SmolVLAPolicy], make_policy(cfg=policy_cfg, env_cfg=env_cfg)
-    )
+    policy = make_policy(cfg=policy_cfg, env_cfg=env_cfg)
+    assert isinstance(policy, (PI05Policy, SmolVLAPolicy))
     policy.eval()
 
     preprocessor, postprocessor = make_pre_post_processors(
