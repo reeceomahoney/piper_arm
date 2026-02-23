@@ -28,6 +28,13 @@ def ssh(cmd: str, *, timeout: int = 10) -> str:
     return result.stdout
 
 
+def parse_table(raw: str) -> tuple[list[str], list[list[str]]]:
+    lines = [ln for ln in raw.strip().splitlines() if ln.strip()]
+    if not lines:
+        return [], []
+    return lines[0].split(), [ln.split() for ln in lines[1:]]
+
+
 # -- Routes ----------------------------------------------------------------
 
 
@@ -42,58 +49,15 @@ def nodes():
         "sinfo -N -p short -o '%.20N %.5t %.15C %.10m %.20G'"
         " | awk 'NR==1 || /h100/ || /l40s/'"
     )
-    lines = [ln for ln in raw.strip().splitlines() if ln.strip()]
-    if not lines:
-        return "<em>No data</em>"
-    headers = lines[0].split()
-    rows = [ln.split() for ln in lines[1:]]
-    html = "<table><tr>"
-    for h in headers:
-        html += f"<th>{h}</th>"
-    html += "</tr>"
-    for row in rows:
-        state = row[1] if len(row) > 1 else ""
-        cls = f"state-{state}" if state else ""
-        html += "<tr>"
-        for cell in row:
-            html += f'<td class="{cls}">{cell}</td>'
-        html += "</tr>"
-    html += "</table>"
-    return html
+    headers, rows = parse_table(raw)
+    return render_template("nodes.html", headers=headers, rows=rows)
 
 
 @app.route("/jobs")
 def jobs():
     raw = ssh("squeue -u $USER -o '%.12i %.30j %.8T %.10M %.20R'")
-    lines = [ln for ln in raw.strip().splitlines() if ln.strip()]
-    if not lines:
-        return "<em>No jobs</em>"
-    headers = lines[0].split()
-    rows = [ln.split() for ln in lines[1:]]
-    html = '<table id="jobs-table"><tr>'
-    for h in headers:
-        html += f"<th>{h}</th>"
-    html += "<th></th></tr>"
-    for row in rows:
-        job_id = row[0] if row else ""
-        state = row[2] if len(row) > 2 else ""
-        cls = f"state-{state}" if state else ""
-        html += "<tr>"
-        for cell in row:
-            html += f'<td class="{cls}">{cell}</td>'
-        html += "<td>"
-        if state == "RUNNING":
-            html += (
-                '<button class="btn btn-log"'
-                f" onclick=\"openLog('{job_id}')\">logs</button> "
-            )
-        html += (
-            '<button class="btn btn-cancel"'
-            f" onclick=\"cancelJob('{job_id}')\">cancel</button>"
-        )
-        html += "</td></tr>"
-    html += "</table>"
-    return html
+    headers, rows = parse_table(raw)
+    return render_template("jobs.html", headers=headers, rows=rows)
 
 
 @app.route("/cancel/<job_id>", methods=["POST"])

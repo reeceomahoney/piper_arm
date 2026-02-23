@@ -1,0 +1,18 @@
+{% if rows %}
+<table>
+  <tr>
+    {% for h in headers %}
+    <th>{{ h }}</th>
+    {% endfor %}
+  </tr>
+  {% for row in rows %}
+  <tr>
+    {% for cell in row %}
+    <td class="state-{{ row[1] }}">{{ cell }}</td>
+    {% endfor %}
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<em>No data</em>
+{% endif %}

@@ -1,0 +1,31 @@
+{% if rows %}
+<table id="jobs-table">
+  <tr>
+    {% for h in headers %}
+    <th>{{ h }}</th>
+    {% endfor %}
+    <th></th>
+  </tr>
+  {% for row in rows %}
+  {% set job_id = row[0] %}
+  {% set state = row[2] if row|length > 2 else "" %}
+  <tr>
+    {% for cell in row %}
+    <td class="state-{{ state }}">{{ cell }}</td>
+    {% endfor %}
+    <td>
+      {% if state == "RUNNING" %}
+      <button class="btn btn-log" onclick="openLog('{{ job_id }}')">
+        logs
+      </button>
+      {% endif %}
+      <button class="btn btn-cancel" onclick="cancelJob('{{ job_id }}')">
+        cancel
+      </button>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<em>No jobs</em>
+{% endif %}
