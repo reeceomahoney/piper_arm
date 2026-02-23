@@ -1,0 +1,125 @@
+:root {
+  --bg: #0d1117;
+  --fg: #c9d1d9;
+  --border: #30363d;
+  --card: #161b22;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --red: #f85149;
+  --yellow: #d29922;
+  --muted: #8b949e;
+}
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+body {
+  font-family: "SF Mono", "Cascadia Code", "Fira Code", monospace;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--fg);
+  padding: 1rem;
+}
+h1 {
+  font-size: 1.3rem;
+  margin-bottom: 1rem;
+  color: var(--accent);
+}
+h2 {
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
+  color: var(--muted);
+}
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  overflow-x: auto;
+}
+.full {
+  grid-column: 1 / -1;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th,
+td {
+  text-align: left;
+  padding: 0.35rem 0.6rem;
+  white-space: nowrap;
+}
+th {
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+tr:hover td {
+  background: rgba(88, 166, 255, 0.05);
+}
+.state-idle,
+.state-mix {
+  color: var(--green);
+}
+.state-alloc {
+  color: var(--yellow);
+}
+.state-down,
+.state-drain {
+  color: var(--red);
+}
+.state-RUNNING {
+  color: var(--green);
+}
+.state-PENDING {
+  color: var(--yellow);
+}
+.state-FAILED,
+.state-CANCELLED {
+  color: var(--red);
+}
+.btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-family: inherit;
+}
+.btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.btn-cancel:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+.btn-log {
+  font-size: 0.75rem;
+}
+pre.log {
+  background: #010409;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.8rem;
+  max-height: 500px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}

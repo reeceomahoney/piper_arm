@@ -85,6 +85,9 @@ clean-logs:
 			rm -f slurm-*.out; \
 		fi'
 
+gui:
+	uv run --extra monitor python piper_arm/gui/app.py
+
 ###############
 # Singularity #
 ###############

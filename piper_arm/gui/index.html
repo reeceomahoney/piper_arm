@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>SLURM Monitor</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='style.css') }}"
+    />
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://unpkg.com/htmx-ext-sse@2.3.0/sse.js"></script>
+  </head>
+  <body>
+    <h1>SLURM Monitor</h1>
+    <div class="grid">
+      <div class="card">
+        <h2>Nodes</h2>
+        <div hx-get="/nodes" hx-trigger="load, every 30s" hx-swap="innerHTML">
+          Loading...
+        </div>
+      </div>
+      <div class="card">
+        <h2>Jobs</h2>
+        <div hx-get="/jobs" hx-trigger="load, every 10s" hx-swap="innerHTML">
+          Loading...
+        </div>
+      </div>
+      <div class="card full" id="log-panel" style="display: none">
+        <div class="log-header">
+          <h2 id="log-title">Logs</h2>
+          <button
+            class="btn"
+            onclick="
+              document.getElementById('log-panel').style.display = 'none';
+              document.getElementById('log-stream').removeAttribute('hx-ext');
+              document.getElementById('log-stream').innerHTML = '';
+            "
+          >
+            Close
+          </button>
+        </div>
+        <pre class="log" id="log-stream"></pre>
+      </div>
+    </div>
+    <script>
+      function openLog(jobId) {
+        const panel = document.getElementById("log-panel");
+        const stream = document.getElementById("log-stream");
+        const title = document.getElementById("log-title");
+        panel.style.display = "block";
+        title.textContent = "Logs — Job " + jobId;
+        stream.innerHTML = "";
+        const evtSource = new EventSource("/logs/" + jobId);
+        evtSource.onmessage = function (e) {
+          stream.textContent += e.data + "\n";
+          stream.scrollTop = stream.scrollHeight;
+        };
+        evtSource.onerror = function () {
+          evtSource.close();
+        };
+        if (window._logSource) window._logSource.close();
+        window._logSource = evtSource;
+      }
+      function cancelJob(jobId) {
+        if (!confirm("Cancel job " + jobId + "?")) return;
+        fetch("/cancel/" + jobId, { method: "POST" }).then(() => {
+          htmx.ajax("GET", "/jobs", {
+            target: '[hx-get="/jobs"]',
+            swap: "innerHTML",
+          });
+        });
+      }
+    </script>
+  </body>
+</html>
