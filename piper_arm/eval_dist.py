@@ -61,6 +61,7 @@ from lerobot.utils.constants import (
     OBS_LANGUAGE_ATTENTION_MASK,
     OBS_LANGUAGE_TOKENS,
 )
+from lerobot.utils.utils import inside_slurm
 from sklearn.covariance import LedoitWolf
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -76,13 +77,14 @@ def embed_prefix_pooled(
 ) -> torch.Tensor:
     """Run a batch through the VLM prefix and return mean-pooled embeddings.
 
-    Supports both PI05 and SmolVLA policies.
+    Supports both PI05 and SmolVLA policies. Only image and state tokens are
+    included in the pooling; language tokens are excluded.
 
     Args:
         batch: Already preprocessed observation dict on device.
 
     Returns:
-        (B, hidden_dim) mean-pooled over valid prefix tokens.
+        (B, hidden_dim) mean-pooled over image and state tokens.
     """
     if isinstance(policy, PI05Policy):
         prefix_out, prefix_pad_masks = _embed_prefix_pi05(policy, batch)
@@ -97,7 +99,11 @@ def embed_prefix_pooled(
 
 
 def _embed_prefix_pi05(policy: PI05Policy, batch: dict):
-    """PI05: images + language → PaliGemma prefix forward (4D attention masks)."""
+    """PI05: images + language → PaliGemma prefix forward (4D attention masks).
+
+    Returns prefix_out and a pooling mask covering image tokens only
+    (language token positions are masked out).
+    """
     model = policy.model
     images, img_masks = policy._preprocess_images(batch)
     lang_tokens = batch[OBS_LANGUAGE_TOKENS]
@@ -119,11 +125,22 @@ def _embed_prefix_pi05(policy: PI05Policy, batch: dict):
         inputs_embeds=cast(list[torch.FloatTensor], [prefix_embs, None]),
         use_cache=False,
     )
-    return prefix_out, prefix_pad_masks
+
+    # Pooling mask: image tokens only (prefix layout: [img...][lang...])
+    n_lang = lang_tokens.shape[1]
+    n_img = prefix_embs.shape[1] - n_lang
+    vis_mask = prefix_pad_masks.clone()
+    vis_mask[:, n_img:] = False
+
+    return prefix_out, vis_mask
 
 
 def _embed_prefix_smolvla(policy: SmolVLAPolicy, batch: dict):
-    """SmolVLA: images + language + state → SmolVLM prefix forward (3D masks)."""
+    """SmolVLA: images + language + state → SmolVLM prefix forward (3D masks).
+
+    Returns prefix_out and a pooling mask covering image + state tokens only
+    (language token positions are masked out).
+    """
     model = policy.model
     images, img_masks = policy.prepare_images(batch)
     state = policy.prepare_state(batch)
@@ -144,7 +161,19 @@ def _embed_prefix_smolvla(policy: SmolVLAPolicy, batch: dict):
         use_cache=False,
         fill_kv_cache=True,
     )
-    return prefix_out, prefix_pad_masks
+
+    # Pooling mask: image + state tokens only
+    # Prefix layout: [img_special+img...][lang...][state...][padding...]
+    # State tokens are the only positions with prefix_att_masks == 1
+    n_lang = lang_tokens.shape[1]
+    state_positions = torch.where(prefix_att_masks[0] == 1)[0]
+    first_state = state_positions[0].item()
+    lang_start = first_state - n_lang
+
+    vis_state_mask = prefix_pad_masks.clone()
+    vis_state_mask[:, lang_start:first_state] = False
+
+    return prefix_out, vis_state_mask
 
 
 def compute_mahalanobis_np(
@@ -183,7 +212,7 @@ def fit_gaussian_from_dataset(
 
     print("Embedding dataset...")
     all_embeddings = []
-    for batch in tqdm(dataloader, desc="Embedding"):
+    for batch in tqdm(dataloader, desc="Embedding", disable=inside_slurm()):
         batch_device = {
             k: v.to(device) if isinstance(v, torch.Tensor) else v
             for k, v in batch.items()
@@ -379,10 +408,10 @@ def plot_mahalanobis(results: list[dict], output_dir: Path):
 class EvalMahalanobisConfig:
     policy_path: str = "reece-omahoney/smolvla-libero-16-chunk"
     dataset: str = "reece-omahoney/libero"
-    n_episodes: int = 10
+    n_episodes: int = 5
     batch_size: int = 32
     num_workers: int = 8
-    load_stats: Optional[str] = "outputs/eval_dist/2026-02-24/13-33-02/gauss_stats.npz"
+    load_stats: Optional[str] = None
     intervene: bool = False
 
 
@@ -452,7 +481,7 @@ def main(cfg: EvalMahalanobisConfig):
         done = np.array([False] * cfg.n_episodes)
         step = 0
 
-        for step in tqdm(range(max_steps), leave=False):
+        for step in tqdm(range(max_steps), leave=False, disable=inside_slurm()):
             if np.all(done):
                 break
 
