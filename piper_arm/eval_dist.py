@@ -77,14 +77,14 @@ def embed_prefix_pooled(
 ) -> torch.Tensor:
     """Run a batch through the VLM prefix and return mean-pooled embeddings.
 
-    Supports both PI05 and SmolVLA policies. Only image and state tokens are
-    included in the pooling; language tokens are excluded.
+    Supports both PI05 and SmolVLA policies. Only image tokens are included
+    in the pooling; language and state tokens are excluded.
 
     Args:
         batch: Already preprocessed observation dict on device.
 
     Returns:
-        (B, hidden_dim) mean-pooled over image and state tokens.
+        (B, hidden_dim) mean-pooled over image tokens.
     """
     if isinstance(policy, PI05Policy):
         prefix_out, prefix_pad_masks = _embed_prefix_pi05(policy, batch)
@@ -138,8 +138,8 @@ def _embed_prefix_pi05(policy: PI05Policy, batch: dict):
 def _embed_prefix_smolvla(policy: SmolVLAPolicy, batch: dict):
     """SmolVLA: images + language + state → SmolVLM prefix forward (3D masks).
 
-    Returns prefix_out and a pooling mask covering image + state tokens only
-    (language token positions are masked out).
+    Returns prefix_out and a pooling mask covering image tokens only
+    (language and state token positions are masked out).
     """
     model = policy.model
     images, img_masks = policy.prepare_images(batch)
@@ -162,7 +162,7 @@ def _embed_prefix_smolvla(policy: SmolVLAPolicy, batch: dict):
         fill_kv_cache=True,
     )
 
-    # Pooling mask: image + state tokens only
+    # Pooling mask: image tokens only
     # Prefix layout: [img_special+img...][lang...][state...][padding...]
     # State tokens are the only positions with prefix_att_masks == 1
     n_lang = lang_tokens.shape[1]
@@ -170,10 +170,10 @@ def _embed_prefix_smolvla(policy: SmolVLAPolicy, batch: dict):
     first_state = state_positions[0].item()
     lang_start = first_state - n_lang
 
-    vis_state_mask = prefix_pad_masks.clone()
-    vis_state_mask[:, lang_start:first_state] = False
+    img_mask = prefix_pad_masks.clone()
+    img_mask[:, lang_start:] = False
 
-    return prefix_out, vis_state_mask
+    return prefix_out, img_mask
 
 
 def compute_mahalanobis_np(
