@@ -423,7 +423,7 @@ def main(cfg: EvalMahalanobisConfig):
     policy_cfg = PreTrainedConfig.from_pretrained(cfg.policy_path)
     policy_cfg.pretrained_path = Path(cfg.policy_path)
 
-    envs = make_env(env_cfg, n_envs=cfg.n_episodes)
+    envs = make_env(env_cfg, n_envs=1)
 
     policy = make_policy(cfg=policy_cfg, env_cfg=env_cfg)
     assert isinstance(policy, (PI05Policy, SmolVLAPolicy))
@@ -469,69 +469,68 @@ def main(cfg: EvalMahalanobisConfig):
         print(f"\n=== Task {task_id + 1}/{n_tasks}: {task_desc} ===")
 
         max_steps = vec_env.call("_max_episode_steps")[0]  # type: ignore[attr-defined]
-        seeds = list(range(cfg.n_episodes))
-
-        observation, info = vec_env.reset(seed=seeds)  # type: ignore[arg-type]
-        policy.reset()
-        successes = [False] * cfg.n_episodes
-        timestep_metrics: list[list[dict[str, Any]]] = [
-            [] for _ in range(cfg.n_episodes)
-        ]
-        dist_histories: list[list[float]] = [[] for _ in range(cfg.n_episodes)]
-        done = np.array([False] * cfg.n_episodes)
-        step = 0
-
-        for step in tqdm(range(max_steps), leave=False, disable=inside_slurm()):
-            if np.all(done):
-                break
-
-            observation = preprocess_observation(observation)
-            observation = add_envs_task(vec_env, observation)
-            observation = env_preprocessor(observation)
-            observation = preprocessor(observation)
-
-            with torch.inference_mode():
-                action, stats = select_action_with_mahalanobis(
-                    policy,
-                    observation,
-                    gauss_mean,
-                    gauss_cov_inv,
-                    dist_histories=dist_histories,
-                    done=done,
-                    intervene=cfg.intervene,
-                )
-
-            if stats is not None:
-                for i in range(cfg.n_episodes):
-                    if not done[i]:
-                        entry = {
-                            "step": step,
-                            "mahalanobis": stats["mahalanobis"][i],
-                        }
-                        if cfg.intervene:
-                            entry["intervention"] = stats["intervention"]
-                        timestep_metrics[i].append(entry)
-
-            action = postprocessor(action)
-
-            action_transition = {ACTION: action}
-            action_transition = env_postprocessor(action_transition)
-            action_np = action_transition[ACTION].to("cpu").numpy()
-
-            observation, _, terminated, truncated, info = vec_env.step(action_np)
-
-            if "final_info" in info:
-                for i, s in enumerate(info["final_info"]["is_success"].tolist()):
-                    if s and not done[i]:
-                        successes[i] = True
-
-            done = terminated | truncated | done
 
         for ep in range(cfg.n_episodes):
-            if timestep_metrics[ep]:
-                mean_dist = np.mean([m["mahalanobis"] for m in timestep_metrics[ep]])
+            observation, info = vec_env.reset(seed=[ep])  # type: ignore[arg-type]
+            policy.reset()
+            success = False
+            timestep_metrics: list[dict[str, Any]] = []
+            dist_history: list[float] = []
+            done = False
+            step = 0
+
+            for step in tqdm(
+                range(max_steps),
+                desc=f"  Episode {ep}",
+                leave=False,
+                disable=inside_slurm(),
+            ):
+                if done:
+                    break
+
+                observation = preprocess_observation(observation)
+                observation = add_envs_task(vec_env, observation)
+                observation = env_preprocessor(observation)
+                observation = preprocessor(observation)
+
+                with torch.inference_mode():
+                    action, stats = select_action_with_mahalanobis(
+                        policy,
+                        observation,
+                        gauss_mean,
+                        gauss_cov_inv,
+                        dist_histories=[dist_history],
+                        done=np.array([done]),
+                        intervene=cfg.intervene,
+                    )
+
+                if stats is not None:
+                    entry: dict[str, Any] = {
+                        "step": step,
+                        "mahalanobis": stats["mahalanobis"][0],
+                    }
+                    if cfg.intervene:
+                        entry["intervention"] = stats["intervention"]
+                    timestep_metrics.append(entry)
+
+                action = postprocessor(action)
+
+                action_transition = {ACTION: action}
+                action_transition = env_postprocessor(action_transition)
+                action_np = action_transition[ACTION].to("cpu").numpy()
+
+                observation, _, terminated, truncated, info = vec_env.step(action_np)
+
+                if "final_info" in info:
+                    if info["final_info"]["is_success"].item():
+                        success = True
+
+                done = bool(terminated | truncated)
+
+            if timestep_metrics:
+                mean_dist = np.mean([m["mahalanobis"] for m in timestep_metrics])
                 n_interventions = sum(
-                    1 for m in timestep_metrics[ep] if m.get("intervention", False)
+                    1 for m in timestep_metrics if m.get("intervention", False)
                 )
             else:
                 mean_dist = float("nan")
@@ -542,15 +541,15 @@ def main(cfg: EvalMahalanobisConfig):
                 "task_description": task_desc,
                 "episode": ep,
                 "n_steps": step + 1,
-                "success": bool(successes[ep]),
+                "success": success,
                 "mean_mahalanobis": float(mean_dist),
                 "n_interventions": n_interventions,
-                "timesteps": timestep_metrics[ep],
+                "timesteps": timestep_metrics,
             }
             results.append(episode_record)
 
             msg = (
-                f"  Episode {ep}: {step + 1} steps, success={successes[ep]}, "
+                f"  Episode {ep}: {step + 1} steps, success={success}, "
                 f"mean_mahalanobis={mean_dist:.4f}"
             )
             if cfg.intervene:
