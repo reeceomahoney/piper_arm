@@ -66,9 +66,9 @@ def jobs():
     closed_lines = [ln for ln in raw_closed.strip().splitlines() if ln.strip()]
     closed_rows = [ln.split("|") for ln in reversed(closed_lines)]
     for row in closed_rows:
-        # Truncate "CANCELLED by 12345" to just "CANCELLED"
+        # Normalise e.g. "CANCELLED by 12345" or "CANCELLED+" to "CANCELLED"
         if len(row) > 2:
-            row[2] = row[2].split()[0]
+            row[2] = row[2].split()[0].rstrip("+")
         tres = row[4] if len(row) > 4 else ""
         gpu = ""
         for part in tres.split(","):

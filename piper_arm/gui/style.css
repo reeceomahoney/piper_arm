@@ -131,8 +131,7 @@ tr:hover td {
   color: var(--yellow);
 }
 .state-FAILED,
-.state-CANCELLED,
-.state-CANCELLED + {
+.state-CANCELLED {
   color: var(--red);
 }
 .state-COMPLETED {
