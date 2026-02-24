@@ -1,10 +1,11 @@
 """SLURM experiment monitor — lightweight web GUI."""
 
-import os
 import subprocess
 from pathlib import Path
 
 from flask import Flask, Response, render_template
+
+from piper_arm.slurm import REMOTE_HOST, REMOTE_PATH
 
 _dir = Path(__file__).parent
 app = Flask(
@@ -13,9 +14,6 @@ app = Flask(
     static_folder=str(_dir),
     static_url_path="/static",
 )
-
-REMOTE_HOST = os.environ.get("REMOTE_HOST", "htc")
-REMOTE_PATH = os.environ.get("REMOTE_PATH", "$DATA/piper_arm")
 
 
 def ssh(cmd: str, *, timeout: int = 10) -> str:

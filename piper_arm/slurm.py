@@ -1,3 +1,5 @@
+"""Utility for submitting jobs to SLURM cluster."""
+
 import subprocess
 from dataclasses import dataclass
 from io import StringIO
@@ -6,6 +8,8 @@ from pathlib import Path
 import draccus
 from fabric import Connection
 
+REMOTE_HOST = "htc"
+REMOTE_PATH = "/data/engs-robotics-ml/kebl6123/piper_arm"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -47,14 +51,14 @@ def build_sbatch_script(cfg: SlurmConfig) -> str:
     return f"#!/bin/bash\n{header}\n\nset -euo pipefail\n{body}\n"
 
 
-def sync(remote_host: str, remote_path: str) -> None:
+def sync() -> None:
     subprocess.run(
         [
             "rsync",
             "-avz",
             "--filter=:- .gitignore",
             f"{PROJECT_ROOT}/",
-            f"{remote_host}:{remote_path}",
+            f"{REMOTE_HOST}:{REMOTE_PATH}",
         ],
         check=True,
     )
@@ -62,9 +66,6 @@ def sync(remote_host: str, remote_path: str) -> None:
 
 @draccus.wrap()  # type: ignore[misc]
 def main(cfg: SlurmConfig):
-    remote_host = "htc"
-    remote_path = "/data/engs-robotics-ml/kebl6123/piper_arm"
-
     script = build_sbatch_script(cfg)
 
     if cfg.dry_run:
@@ -72,13 +73,13 @@ def main(cfg: SlurmConfig):
         print(script)
         return
 
-    print("Syncing...", flush=True)
-    sync(remote_host, remote_path)
+    print("Syncing...")
+    sync()
 
-    print("Submitting...", flush=True)
-    conn = Connection(remote_host)
-    conn.put(StringIO(script), f"{remote_path}/.submit.sh")
-    conn.run(f"cd {remote_path} && sbatch .submit.sh")
+    print("Submitting...")
+    conn = Connection(REMOTE_HOST)
+    conn.put(StringIO(script), f"{REMOTE_PATH}/.submit.sh")
+    conn.run(f"cd {REMOTE_PATH} && sbatch .submit.sh")
 
 
 if __name__ == "__main__":
