@@ -136,6 +136,10 @@ tr:hover td {
 }
 
 /* Buttons */
+.btn-group {
+  display: flex;
+  gap: 0.4rem;
+}
 .btn {
   background: none;
   border: 1px solid var(--border);

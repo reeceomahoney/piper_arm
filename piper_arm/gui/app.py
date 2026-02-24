@@ -5,7 +5,7 @@ from pathlib import Path
 
 from flask import Flask, Response, render_template
 
-from piper_arm.slurm import REMOTE_HOST, REMOTE_PATH
+from piper_arm.slurm import PROJECT_ROOT, REMOTE_HOST, REMOTE_PATH
 
 _dir = Path(__file__).parent
 app = Flask(
@@ -63,6 +63,21 @@ def cancel(job_id):
     if not job_id.isdigit():
         return "Bad job id", 400
     ssh(f"scancel {job_id}")
+    return "", 204
+
+
+@app.route("/fetch-results", methods=["PUT"])
+def fetch_results():
+    subprocess.run(
+        [
+            "rsync",
+            "-avz",
+            f"{REMOTE_HOST}:{REMOTE_PATH}/outputs/eval_dist/",
+            f"{PROJECT_ROOT}/outputs/eval_dist/",
+        ],
+        capture_output=True,
+        timeout=120,
+    )
     return "", 204
 
 
