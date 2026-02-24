@@ -1,4 +1,4 @@
-.PHONY: train train-vae finetune eval eval-dist record play fetch-eval clean-logs gui
+.PHONY: train train-vae finetune eval eval-dist record play fetch-eval gui
 
 ############
 # Training #
@@ -44,14 +44,6 @@ REMOTE_PATH = ${DATA}/piper_arm
 
 fetch-eval:
 	rsync -avz $(REMOTE_HOST):$(REMOTE_PATH)/outputs/eval_dist/ ./outputs/eval_dist/
-
-clean-logs:
-	ssh $(REMOTE_HOST) 'cd $(REMOTE_PATH) && running=$$(squeue -u $$USER -h -t R -o "slurm-%i.out"); \
-		if [ -n "$$running" ]; then \
-			ls slurm-*.out 2>/dev/null | grep -vF "$$running" | xargs -r rm -f; \
-		else \
-			rm -f slurm-*.out; \
-		fi'
 
 gui:
 	uv run --extra gui piper_arm/gui/app.py

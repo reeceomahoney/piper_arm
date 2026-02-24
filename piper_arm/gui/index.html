@@ -21,7 +21,12 @@
     <div class="layout">
       <div class="left">
         <div class="card left-top">
-          <h2>Jobs</h2>
+          <div class="card-header">
+            <h2>Jobs</h2>
+            <button class="btn" id="clean-logs-btn" onclick="cleanLogs()">
+              Clean Logs
+            </button>
+          </div>
           <div hx-get="/jobs" hx-trigger="load, every 10s" hx-swap="innerHTML">
             Loading...
           </div>
@@ -69,6 +74,14 @@
         $("#log-content").hide();
         $("#log-placeholder").css("display", "flex");
         $("#log-stream").empty();
+      }
+      function cleanLogs() {
+        if (!confirm("Delete logs for completed jobs?")) return;
+        var $btn = $("#clean-logs-btn");
+        $btn.prop("disabled", true).text("Cleaning...");
+        $.ajax({ url: "/clean-logs", method: "DELETE" }).always(function () {
+          $btn.prop("disabled", false).text("Clean Logs");
+        });
       }
       function cancelJob(id) {
         if (!confirm("Cancel job " + id + "?")) return;

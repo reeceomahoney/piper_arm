@@ -66,6 +66,19 @@ def cancel(job_id):
     return "", 204
 
 
+@app.route("/clean-logs", methods=["DELETE"])
+def clean_logs():
+    ssh(
+        f"cd {REMOTE_PATH} && running=$(squeue -u $USER -h -t R -o 'slurm-%i.out'); "
+        'if [ -n "$running" ]; then '
+        'ls slurm-*.out 2>/dev/null | grep -vF "$running" | xargs -r rm -f; '
+        "else "
+        "rm -f slurm-*.out; "
+        "fi"
+    )
+    return "", 204
+
+
 @app.route("/logs/<job_id>")
 def logs(job_id):
     if not job_id.isdigit():

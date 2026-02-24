@@ -154,6 +154,10 @@ tr:hover td {
   border-color: var(--red);
   color: var(--red);
 }
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .btn-log {
   font-size: 0.75rem;
 }
@@ -172,7 +176,8 @@ pre.log {
   font-size: 0.8rem;
   line-height: 1.5;
 }
-.log-header {
+.log-header,
+.card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
