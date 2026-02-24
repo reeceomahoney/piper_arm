@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 @dataclass
 class SlurmConfig:
-    command: str = "python eval_dist.py"
+    command: str = "python piper_arm/eval_dist.py"
 
     # SLURM options
     time: int = 1
