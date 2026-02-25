@@ -15,12 +15,14 @@ dependencies = [
   "prettytable>=3.17.0",
   "lightning>=2.6.1",
   "fabric>=3.2.2",
-  "flask>=3.0",
 ]
 
 [dependency-groups]
 dev = ["pre-commit>=4.5.1", "pyright>=1.1.408"]
 hardware = ["lerobot_robot_piper", "lerobot_teleoperator_piper"]
+
+[project.optional-dependencies]
+gui = ["flask>=3.0"]
 
 [project.scripts]
 slurm = "piper_arm.slurm:main"

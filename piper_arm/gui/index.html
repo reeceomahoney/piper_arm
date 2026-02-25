@@ -100,9 +100,11 @@
           $btn.prop("disabled", false).text("Clean Logs");
         });
       }
-      function cancelJob(id) {
+      function cancelJob(id, btn) {
         if (!confirm("Cancel job " + id + "?")) return;
-        $.post("/cancel/" + id).then(function () {
+        var $btn = $(btn);
+        $btn.prop("disabled", true).text("cancelling…");
+        $.post("/cancel/" + id).always(function () {
           htmx.ajax("GET", "/jobs", {
             target: '[hx-get="/jobs"]',
             swap: "innerHTML",
