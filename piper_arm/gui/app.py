@@ -1,5 +1,6 @@
 """SLURM experiment monitor — lightweight web GUI."""
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -41,14 +42,89 @@ def index():
     return render_template("index.html")
 
 
+_GRES_RE = re.compile(r"gpu:(?:[^:(]+:)?(\d+)", re.IGNORECASE)
+_GRES_TYPE_RE = re.compile(r"gpu:([^:(]+):(\d+)", re.IGNORECASE)
+_DOWN = {"down", "down*", "drain", "drain*", "drng", "maint"}
+_NODELIST_RE = re.compile(r"^(.+)\[(.+)]$")
+
+
+def _gpu_count(gres: str) -> int:
+    m = _GRES_RE.search(gres)
+    return int(m.group(1)) if m else 0
+
+
+def _gpu_type_and_count(gres: str) -> tuple[str, int] | None:
+    m = _GRES_TYPE_RE.search(gres)
+    return (m.group(1).upper(), int(m.group(2))) if m else None
+
+
+def _expand_nodelist(s: str) -> list[str]:
+    m = _NODELIST_RE.match(s)
+    if not m:
+        return [s]
+    prefix, ranges = m.group(1), m.group(2)
+    out: list[str] = []
+    for part in ranges.split(","):
+        if "-" in part:
+            lo, hi = part.split("-", 1)
+            out += [
+                f"{prefix}{str(i).zfill(len(lo))}" for i in range(int(lo), int(hi) + 1)
+            ]
+        else:
+            out.append(f"{prefix}{part}")
+    return out
+
+
 @app.route("/nodes")
 def nodes():
-    raw = ssh(
-        "sinfo -p short -o '%.20N %.5t %.15C %.10m %.20G'"
-        " | awk 'NR==1 || /h100/ || /l40s/'"
-    )
-    headers, rows = parse_table(raw)
-    return render_template("nodes.html", headers=headers, rows=rows)
+    raw_nodes = ssh("sinfo -N -h -o '%N|%t|%G'")
+    raw_jobs = ssh("squeue -h --states=running,completing -o '%N|%b'")
+
+    # Per-node allocated GPU count from running jobs
+    node_alloc: dict[str, int] = {}
+    for line in raw_jobs.strip().splitlines():
+        parts = line.split("|")
+        if len(parts) != 2 or not parts[0].strip() or parts[1] in ("", "N/A"):
+            continue
+        for node in _expand_nodelist(parts[0]):
+            node_alloc[node] = node_alloc.get(node, 0) + _gpu_count(parts[1])
+
+    # Aggregate by GPU type
+    seen: set[str] = set()
+    totals: dict[str, int] = {}
+    free: dict[str, int] = {}
+    for line in raw_nodes.strip().splitlines():
+        parts = line.split("|")
+        if len(parts) != 3 or parts[0] in seen:
+            continue
+        seen.add(parts[0])
+        parsed = _gpu_type_and_count(parts[2])
+        if not parsed:
+            continue
+        gpu_type, total = parsed
+        state = parts[1]
+
+        allocated = node_alloc.get(parts[0], 0)
+        if not allocated and state in ("alloc", "resv"):
+            allocated = total
+        node_free = max(0, total - allocated) if state not in _DOWN else 0
+
+        totals[gpu_type] = totals.get(gpu_type, 0) + total
+        free[gpu_type] = free.get(gpu_type, 0) + node_free
+
+    gpus = []
+    for gpu_type in sorted(totals):
+        t, f = totals[gpu_type], free[gpu_type]
+        gpus.append(
+            {
+                "type": gpu_type,
+                "total": t,
+                "used": t - f,
+                "free": f,
+                "pct": round((t - f) / t * 100) if t else 0,
+            }
+        )
+    return render_template("nodes.html", gpus=gpus)
 
 
 @app.route("/jobs")

@@ -192,6 +192,31 @@ pre.log {
   font-size: 0.8rem;
   line-height: 1.5;
 }
+/* GPU utilization bar */
+.gpu-bar {
+  display: flex;
+  height: 20px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--border);
+  font-size: 0.75rem;
+  line-height: 20px;
+}
+.gpu-bar-used {
+  background: var(--yellow);
+  color: #000;
+  text-align: center;
+  font-weight: 600;
+  min-width: 0;
+}
+.gpu-bar-free {
+  background: var(--green);
+  color: #000;
+  text-align: center;
+  font-weight: 600;
+  min-width: 0;
+}
+
 .log-header,
 .card-header {
   display: flex;
