@@ -1,4 +1,4 @@
-.PHONY: train finetune eval record play gui container
+.PHONY: train finetune eval record play gui gui-start gui-stop container
 
 ############
 # Training #
@@ -29,12 +29,21 @@ play:
 	uv run lerobot-record --config_path configs/play.yaml \
 		--policy.path=reece-omahoney/smolvla-libero-256
 
-#########
-# SLURM #
-#########
+#######
+# GUI #
+#######
 
-gui:
-	uv run --extra gui piper_arm/gui/app.py
+gui-start:
+	@if [ -f /tmp/piper-gui.pid ] && kill -0 $$(cat /tmp/piper-gui.pid) 2>/dev/null; then \
+		echo "GUI already running (PID $$(cat /tmp/piper-gui.pid))"; \
+	else \
+		rm -f /tmp/piper-gui.pid; \
+		nohup uv run --extra gui piper_arm/gui/app.py &> /tmp/piper-gui.log & echo $$! > /tmp/piper-gui.pid; \
+		echo "GUI started (PID $$(cat /tmp/piper-gui.pid))"; \
+	fi
+
+gui-stop:
+	@kill $$(cat /tmp/piper-gui.pid) 2>/dev/null && rm -f /tmp/piper-gui.pid && echo "GUI stopped" || echo "GUI not running"
 
 #############
 # Container #
