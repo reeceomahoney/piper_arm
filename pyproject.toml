@@ -12,8 +12,6 @@ dependencies = [
   "pyrealsense2>=2.56.5.9235; sys_platform != 'darwin'",
   "matplotlib>=3.7.0",
   "scikit-learn>=1.3.0",
-  "prettytable>=3.17.0",
-  "lightning>=2.6.1",
   "fabric>=3.2.2",
 ]
 
