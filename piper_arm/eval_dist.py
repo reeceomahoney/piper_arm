@@ -733,30 +733,36 @@ def main(cfg: EvalMahalanobisConfig):
         delta = i_s - c_s
         print(f"  {desc[:50]:<50} {c_s:>2}/{n:<2} {i_s:>2}/{n:<2} {delta:>+4}")
 
-    # Intervention diagnostics
-    total_interventions = sum(p["intervene_n_interventions"] for p in paired_results)
-    success_interventions = sum(
-        p["intervene_n_interventions"] for p in paired_results if p["intervene_success"]
+    # Intervention detection (paired: control outcome as ground truth)
+    tp = sum(
+        1
+        for p in paired_results
+        if not p["control_success"] and p["intervene_n_interventions"] > 0
     )
-    if total_interventions > 0:
-        print("\nIntervention diagnostics:")
-        print(
-            f"  Interventions on successful episodes: "
-            f"{success_interventions}/{total_interventions} "
-            f"({100 * success_interventions / total_interventions:.1f}%)"
-        )
-    n_failed = sum(1 for p in paired_results if not p["intervene_success"])
-    if n_failed > 0:
-        failed_no_intervention = sum(
-            1
-            for p in paired_results
-            if not p["intervene_success"] and p["intervene_n_interventions"] == 0
-        )
-        print(
-            f"  Failed episodes with no intervention: "
-            f"{failed_no_intervention}/{n_failed} "
-            f"({100 * failed_no_intervention / n_failed:.1f}%)"
-        )
+    fn = sum(
+        1
+        for p in paired_results
+        if not p["control_success"] and p["intervene_n_interventions"] == 0
+    )
+    fp = sum(
+        1
+        for p in paired_results
+        if p["control_success"] and p["intervene_n_interventions"] > 0
+    )
+    tn = sum(
+        1
+        for p in paired_results
+        if p["control_success"] and p["intervene_n_interventions"] == 0
+    )
+    precision = tp / (tp + fp) if (tp + fp) > 0 else float("nan")
+    recall = tp / (tp + fn) if (tp + fn) > 0 else float("nan")
+    print("\nIntervention detection (control outcome as ground truth):")
+    print(f"  TP (control fail, detected):      {tp}")
+    print(f"  FN (control fail, missed):        {fn}")
+    print(f"  FP (control success, intervened): {fp}")
+    print(f"  TN (control success, no trigger): {tn}")
+    print(f"  Precision: {precision:.3f}")
+    print(f"  Recall:    {recall:.3f}")
 
     # Save statistical summary
     summary = {
