@@ -19,7 +19,7 @@ class SlurmConfig:
 
     # SLURM options
     time: int = 1
-    gpu: str = "h100"
+    gpu: str = "l40s"
     ngpu: int = 1
     cpus: int = 16
     mem: str = "8G"
