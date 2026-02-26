@@ -11,8 +11,9 @@ Phase 2: Roll out the policy in LIBERO and at each timestep compute the VLM
 
           With --intervene: when the moving average of distances exceeds
           INTERVENTION_K times the baseline (mean of the first MA_WINDOW
-          forward-pass distances), the action chunk is reduced to a single step
-          so the policy re-evaluates at every subsequent timestep.
+          forward-pass distances), the new action chunk is blended with the
+          previous chunk (weighted by BLEND_ALPHA) to dampen erratic
+          predictions. Action chunk length is always n_action_steps.
 
 Usage:
     # Full run (embed dataset + rollout) with PI05:
@@ -241,7 +242,7 @@ def fit_gaussian_from_dataset(
 
 
 MA_WINDOW = 10
-INTERVENTION_K = 1.1
+INTERVENTION_THRESHOLD = 37.0
 
 CONDITIONS = ["control", "intervene"]
 
@@ -263,20 +264,23 @@ def select_action_with_mahalanobis(
     gauss_cov_inv: np.ndarray,
     dist_histories: list[list[float]],
     done: np.ndarray,
+    prev_chunk: list[Optional[torch.Tensor]],
     intervene: bool = False,
 ) -> tuple[torch.Tensor, dict | None]:
     """Like select_action but also returns Mahalanobis distance of the current obs.
 
     Supports both PI05 and SmolVLA policies.
 
-    When intervene=True, reduces the action chunk to a single step when the
-    per-episode moving average of distances exceeds INTERVENTION_K times the
-    baseline (mean of the first MA_WINDOW forward-pass distances),
-    forcing the policy to re-evaluate every timestep until it settles back down.
+    When intervene=True and OOD is detected, the previous action chunk is
+    reversed (negated deltas played in reverse order) to backtrack the robot
+    to its pre-chunk state, then the policy re-plans on the next forward pass.
+    Action chunk length is always n_action_steps.
 
     Args:
         dist_histories: Per-episode list of distances from forward passes so far
                         this episode. Updated in-place. Reset between episodes.
+        prev_chunk: Single-element list holding the previous action chunk tensor
+                    (mutated in-place). Pass [None] at episode start.
 
     Returns:
         action: Single action tensor for env stepping.
@@ -298,24 +302,30 @@ def select_action_with_mahalanobis(
             if not done[i]:
                 dist_histories[i].append(d)
 
-        # Intervene if any episode's moving average has risen k× above its baseline
+        # Intervene if any episode's moving average exceeds absolute threshold
         ood = False
         if intervene:
             for history in dist_histories:
                 if len(history) >= MA_WINDOW:
-                    baseline = np.mean(history[:MA_WINDOW])
                     current_ma = np.mean(history[-MA_WINDOW:])
-                    if current_ma > INTERVENTION_K * baseline:
+                    if current_ma > INTERVENTION_THRESHOLD:
                         ood = True
                         break
 
         stats = {"mahalanobis": dist.tolist(), "intervention": ood}
 
-        # Generate action chunk; if OOD, only use first action so we re-evaluate
-        # on the very next step instead of committing to a full chunk.
-        action_chunk = policy.predict_action_chunk(batch)
-        n_steps = 1 if ood else policy.config.n_action_steps
-        action_queue.extend(action_chunk[:, :n_steps].transpose(0, 1))
+        # Backtrack: reverse the previous chunk's deltas to undo recent motion,
+        # then let the next forward pass re-plan from the recovered state.
+        if ood and prev_chunk[0] is not None:
+            reversed_chunk = -prev_chunk[0].flip(dims=[1])
+            action_queue.extend(reversed_chunk.transpose(0, 1))
+            prev_chunk[0] = None
+        else:
+            action_chunk = policy.predict_action_chunk(batch)
+            n_steps = policy.config.n_action_steps
+            action_chunk = action_chunk[:, :n_steps]
+            prev_chunk[0] = action_chunk
+            action_queue.extend(action_chunk.transpose(0, 1))
 
     action = action_queue.popleft()
     return action, stats
@@ -423,7 +433,7 @@ def plot_mahalanobis(paired_results: list[dict], output_dir: Path):
 
     plot_path = output_dir / "eval_dist.png"
     fig.savefig(plot_path, dpi=150)
-    print(f"Plot saved to {plot_path}")
+    print(f"\nPlot saved to {plot_path}")
     plt.show()
 
 
@@ -465,6 +475,7 @@ def _run_episode(
     success = False
     timestep_metrics: list[dict[str, Any]] = []
     dist_history: list[float] = []
+    prev_chunk: list[Optional[torch.Tensor]] = [None]
     done = False
     step = 0
 
@@ -490,6 +501,7 @@ def _run_episode(
                 gauss_cov_inv,
                 dist_histories=[dist_history],
                 done=np.array([done]),
+                prev_chunk=prev_chunk,
                 intervene=intervene,
             )
 
@@ -733,36 +745,37 @@ def main(cfg: EvalMahalanobisConfig):
         delta = i_s - c_s
         print(f"  {desc[:50]:<50} {c_s:>2}/{n:<2} {i_s:>2}/{n:<2} {delta:>+4}")
 
-    # Intervention detection (paired: control outcome as ground truth)
-    tp = sum(
+    # Intervention detection (within intervention arm)
+    intv_fail_detected = sum(
         1
         for p in paired_results
-        if not p["control_success"] and p["intervene_n_interventions"] > 0
+        if not p["intervene_success"] and p["intervene_n_interventions"] > 0
     )
-    fn = sum(
+    intv_fail_missed = sum(
         1
         for p in paired_results
-        if not p["control_success"] and p["intervene_n_interventions"] == 0
+        if not p["intervene_success"] and p["intervene_n_interventions"] == 0
     )
-    fp = sum(
+    intv_success_triggered = sum(
         1
         for p in paired_results
-        if p["control_success"] and p["intervene_n_interventions"] > 0
+        if p["intervene_success"] and p["intervene_n_interventions"] > 0
     )
-    tn = sum(
+    intv_success_clean = sum(
         1
         for p in paired_results
-        if p["control_success"] and p["intervene_n_interventions"] == 0
+        if p["intervene_success"] and p["intervene_n_interventions"] == 0
     )
-    precision = tp / (tp + fp) if (tp + fp) > 0 else float("nan")
-    recall = tp / (tp + fn) if (tp + fn) > 0 else float("nan")
-    print("\nIntervention detection (control outcome as ground truth):")
-    print(f"  TP (control fail, detected):      {tp}")
-    print(f"  FN (control fail, missed):        {fn}")
-    print(f"  FP (control success, intervened): {fp}")
-    print(f"  TN (control success, no trigger): {tn}")
-    print(f"  Precision: {precision:.3f}")
-    print(f"  Recall:    {recall:.3f}")
+    n_intv_fail = intv_fail_detected + intv_fail_missed
+    n_intv_success = intv_success_triggered + intv_success_clean
+    print("\nIntervention detection (within intervention arm):")
+    print(f"  Failed episodes detected:          {intv_fail_detected}/{n_intv_fail}")
+    print(f"  Failed episodes missed:            {intv_fail_missed}/{n_intv_fail}")
+    print(
+        f"  Successful episodes triggered:     "
+        f"{intv_success_triggered}/{n_intv_success}"
+    )
+    print(f"  Successful episodes clean:         {intv_success_clean}/{n_intv_success}")
 
     # Save statistical summary
     summary = {
