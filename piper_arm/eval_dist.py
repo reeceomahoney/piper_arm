@@ -629,6 +629,12 @@ def main(cfg: EvalMahalanobisConfig):
     output_dir = output_base / f"eval_dist/{timestamp}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Create a "latest" symlink for convenience
+    latest_link = output_base / "eval_dist/latest"
+    if latest_link.is_symlink() or latest_link.exists():
+        latest_link.unlink()
+    latest_link.symlink_to(output_dir.resolve())
+
     # Save Gaussian stats for reuse
     np.savez(output_dir / "gauss_stats.npz", mean=gauss_mean, cov_inv=gauss_cov_inv)
     print(f"Saved Gaussian stats to {output_dir / 'gauss_stats.npz'}")
