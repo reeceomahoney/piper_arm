@@ -63,7 +63,6 @@ from lerobot.utils.constants import (
     OBS_LANGUAGE_TOKENS,
 )
 from lerobot.utils.utils import inside_slurm
-from sklearn.covariance import LedoitWolf
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -225,12 +224,9 @@ def fit_gaussian_from_dataset(
     embeddings = np.concatenate(all_embeddings, axis=0)
     print(f"Embedded {embeddings.shape[0]} frames, dim={embeddings.shape[1]}")
 
-    print("Fitting Gaussian (Ledoit-Wolf shrinkage)...")
-    lw = LedoitWolf(assume_centered=False)
-    lw.fit(embeddings)
-    mean: np.ndarray = lw.location_
-    cov_inv: np.ndarray = lw.precision_  # type: ignore[assignment]
-    print(f"  Ledoit-Wolf shrinkage coefficient: {lw.shrinkage_:.4f}")
+    print("Fitting Gaussian...")
+    mean: np.ndarray = embeddings.mean(axis=0)
+    cov_inv: np.ndarray = np.linalg.inv(np.cov(embeddings.T))
 
     return mean, cov_inv
 
