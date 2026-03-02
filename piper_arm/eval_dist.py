@@ -24,14 +24,11 @@ Usage:
         --n-episodes 3
 """
 
-import json
-import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Union, cast
+from typing import Any, Union, cast
 
-import cv2
 import draccus
 import numpy as np
 import torch
@@ -184,17 +181,16 @@ def compute_mahalanobis_np(
 def fit_gaussian_from_dataset(
     policy: Union[PI05Policy, SmolVLAPolicy],
     preprocessor: Any,
-    dataset: str,
+    dataset: LeRobotDataset,
     batch_size: int,
     num_workers: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Embed the full dataset and return (mean, cov_inv)."""
     device = next(policy.parameters()).device
 
-    print(f"Loading dataset: {dataset}")
-    lerobot_dataset = LeRobotDataset(repo_id=dataset)
+    print(f"Loading dataset: {dataset.repo_id} with {len(dataset)} frames")
     dataloader = DataLoader(
-        lerobot_dataset,
+        dataset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
@@ -229,12 +225,6 @@ def fit_gaussian_from_dataset(
 
 MA_WINDOW = 10
 
-# Camera keys in observation["pixels"] → short names for output files
-CAMERA_KEYS = {
-    "image": "agentview",
-    "image2": "eye_in_hand",
-}
-
 
 def _get_action_queue(policy: Union[PI05Policy, SmolVLAPolicy]):
     """Return the action deque for the given policy type."""
@@ -245,17 +235,24 @@ def _get_action_queue(policy: Union[PI05Policy, SmolVLAPolicy]):
     raise TypeError(f"Unsupported policy type: {type(policy)}")
 
 
-def _write_video(frames: list[np.ndarray], path: Path, fps: int = 10) -> None:
-    """Write a list of uint8 HWC frames to an MP4 file."""
-    if not frames:
-        return
-    h, w = frames[0].shape[:2]
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(str(path), fourcc, fps, (w, h))
-    for frame in frames:
-        # observation frames are RGB, VideoWriter expects BGR
-        writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-    writer.release()
+def build_frame(
+    obs: dict[str, Any], action: torch.Tensor, features: dict[str, dict]
+) -> dict[str, Any]:
+    """Extract dataset-relevant fields from a preprocessed observation."""
+    frame = {"action": action}
+
+    for key in features:
+        val = obs.get(key)
+        if val is None:
+            continue
+
+        if key.startswith("observation.images."):
+            # (C, H, W) float [0,1] → (H, W, C) uint8
+            frame[key] = (val.permute(1, 2, 0) * 255).to(torch.uint8)
+        else:
+            frame[key] = val
+
+    return frame
 
 
 def _run_episode_capture(
@@ -270,13 +267,16 @@ def _run_episode_capture(
     seed: int,
     desc: str = "",
 ) -> dict[str, Any]:
-    """Run a single episode, capturing camera frames and Mahalanobis traces.
+    """Run a single episode, capturing full observations, actions, and
+    Mahalanobis traces.
 
     No interventions — the episode runs to completion or truncation.
 
     Returns:
         Dict with keys: success, n_steps, mean_distance,
-        camera_frames (dict of lists), trace_steps, trace_distances.
+        trace_steps, trace_distances,
+        actions (list of np.ndarray),
+        observations (list of dicts — preprocessed observation per step).
     """
     max_steps = vec_env.call("_max_episode_steps")[0]
     observation, info = vec_env.reset(seed=[seed])
@@ -288,9 +288,8 @@ def _run_episode_capture(
     trace_steps: list[int] = []
     trace_distances: list[float] = []
     dist_history: list[float] = []
-    camera_frames: dict[str, list[np.ndarray]] = {
-        name: [] for name in CAMERA_KEYS.values()
-    }
+    actions: list[np.ndarray] = []
+    observations: list[dict[str, torch.Tensor]] = []
 
     for step in tqdm(
         range(max_steps),
@@ -301,17 +300,17 @@ def _run_episode_capture(
         if done:
             break
 
-        # Capture raw pixel frames before preprocessing
-        pixels = observation["pixels"]
-        for obs_key, name in CAMERA_KEYS.items():
-            if obs_key in pixels:
-                # Shape: (1, H, W, 3) uint8 — take the first env
-                frame = pixels[obs_key][0]
-                camera_frames[name].append(frame)
-
         observation = preprocess_observation(observation)
         observation = add_envs_task(vec_env, observation)
         observation = env_preprocessor(observation)
+
+        observations.append(
+            {
+                k: v[0].cpu() if isinstance(v, torch.Tensor) else v
+                for k, v in observation.items()
+            }
+        )
+
         observation = preprocessor(observation)
 
         with torch.inference_mode():
@@ -335,6 +334,7 @@ def _run_episode_capture(
 
             action = action_queue.popleft()
 
+        actions.append(action[0].cpu())
         action = postprocessor(action)
         action_transition = {ACTION: action}
         action_transition = env_postprocessor(action_transition)
@@ -354,9 +354,10 @@ def _run_episode_capture(
         "success": success,
         "n_steps": step + 1 if max_steps > 0 else 0,
         "mean_distance": mean_dist,
-        "camera_frames": camera_frames,
         "trace_steps": trace_steps,
         "trace_distances": trace_distances,
+        "actions": actions,
+        "observations": observations,
     }
 
 
@@ -412,16 +413,13 @@ def _plot_traces(results: list[dict], output_dir: Path) -> None:
 @dataclass
 class EvalDistConfig:
     policy_path: str = "reece-omahoney/smolvla-libero-16-chunk"
-    dataset: str = "reece-omahoney/libero"
+    base_dataset_repo_id: str = "reece-omahoney/libero"
     n_episodes: int = 50
     batch_size: int = 32
     num_workers: int = 8
-    load_stats: Optional[str] = os.path.join(
-        os.environ.get("OUTPUT_DIR", "outputs"),
-        "eval_dist/2026-02-24/17-07-42/gauss_stats.npz",
-    )
-    save_videos: bool = False
-    output_dir: str = os.path.join(os.environ.get("OUTPUT_DIR", "outputs"), "eval_dist")
+    load_stats: str | None = "outputs/eval_dist/2026-03-02/13-11-13/gauss_stats.npz"
+    dataset_repo_id: str | None = "reece-omahoney/rollout-dataset"
+    output_dir: str = "outputs/eval_dist"
 
 
 @draccus.wrap()  # type: ignore[misc]
@@ -444,6 +442,7 @@ def main(cfg: EvalDistConfig):
     env_preprocessor, env_postprocessor = make_env_pre_post_processors(
         env_cfg, policy_cfg
     )
+    base_dataset = LeRobotDataset(repo_id=cfg.base_dataset_repo_id)
 
     # ── Phase 1: Get Gaussian stats ──
     if cfg.load_stats is not None:
@@ -456,7 +455,7 @@ def main(cfg: EvalDistConfig):
         gauss_mean, gauss_cov_inv = fit_gaussian_from_dataset(
             policy=policy,
             preprocessor=preprocessor,
-            dataset=cfg.dataset,
+            dataset=base_dataset,
             batch_size=cfg.batch_size,
             num_workers=cfg.num_workers,
         )
@@ -476,67 +475,79 @@ def main(cfg: EvalDistConfig):
     np.savez(output_dir / "gauss_stats.npz", mean=gauss_mean, cov_inv=gauss_cov_inv)
     print(f"Saved Gaussian stats to {output_dir / 'gauss_stats.npz'}")
 
+    # ── Dataset setup ──
+    dataset = None
+    if cfg.dataset_repo_id:
+        dataset = LeRobotDataset.create(
+            repo_id=cfg.dataset_repo_id,
+            fps=int(base_dataset.meta.fps),
+            features=base_dataset.meta.features,
+            root=output_dir / "dataset",
+        )
+
     # ── Phase 2: Rollout with capture ──
     summary_entries: list[dict[str, Any]] = []
     all_results: list[dict[str, Any]] = []
 
-    for task_id, vec_env in envs[suite_name].items():
-        task_desc = vec_env.call("task_description")[0]
-        n_tasks = len(envs[suite_name])
-        print(f"\n=== Task {task_id + 1}/{n_tasks}: {task_desc} ===")
+    try:
+        for task_id, vec_env in envs[suite_name].items():
+            task_desc = vec_env.call("task_description")[0]
+            n_tasks = len(envs[suite_name])
+            print(f"\n=== Task {task_id + 1}/{n_tasks}: {task_desc} ===")
 
-        for ep in range(cfg.n_episodes):
-            result = _run_episode_capture(
-                policy=policy,
-                vec_env=vec_env,
-                preprocessor=preprocessor,
-                postprocessor=postprocessor,
-                env_preprocessor=env_preprocessor,
-                env_postprocessor=env_postprocessor,
-                gauss_mean=gauss_mean,
-                gauss_cov_inv=gauss_cov_inv,
-                seed=ep,
-                desc=f"  Ep {ep}",
-            )
+            for ep in range(cfg.n_episodes):
+                result = _run_episode_capture(
+                    policy=policy,
+                    vec_env=vec_env,
+                    preprocessor=preprocessor,
+                    postprocessor=postprocessor,
+                    env_preprocessor=env_preprocessor,
+                    env_postprocessor=env_postprocessor,
+                    gauss_mean=gauss_mean,
+                    gauss_cov_inv=gauss_cov_inv,
+                    seed=ep,
+                    desc=f"  Ep {ep}",
+                )
 
-            # Save videos (optional)
-            if cfg.save_videos:
-                for name in CAMERA_KEYS.values():
-                    video_path = output_dir / f"episode_{ep}_{name}.mp4"
-                    _write_video(result["camera_frames"][name], video_path)
+                # Build LeRobot dataset incrementally
+                if dataset is not None:
+                    for frame_idx in range(len(result["observations"])):
+                        frame = build_frame(
+                            result["observations"][frame_idx],
+                            result["actions"][frame_idx],
+                            dataset.meta.features,
+                        )
+                        frame["task"] = task_desc
+                        dataset.add_frame(frame)
+                    dataset.save_episode()
 
-            # Save trace
-            trace_path = output_dir / f"episode_{ep}_trace.npz"
-            np.savez(
-                trace_path,
-                steps=np.array(result["trace_steps"]),
-                distances=np.array(result["trace_distances"]),
-            )
+                status = "OK" if result["success"] else "FAIL"
+                print(
+                    f"  Episode {ep}: {status} | "
+                    f"{result['n_steps']} steps | "
+                    f"mean_dist={result['mean_distance']:.2f}"
+                )
 
-            status = "OK" if result["success"] else "FAIL"
+                summary_entries.append(
+                    {
+                        "episode": ep,
+                        "task_id": task_id,
+                        "task_description": task_desc,
+                        "success": result["success"],
+                        "n_steps": result["n_steps"],
+                        "mean_distance": result["mean_distance"],
+                    }
+                )
+                all_results.append(result)
+
+            vec_env.close()
+    finally:
+        if dataset is not None:
+            dataset.finalize()
             print(
-                f"  Episode {ep}: {status} | "
-                f"{result['n_steps']} steps | "
-                f"mean_dist={result['mean_distance']:.2f}"
+                f"Dataset saved to {dataset.root}"
+                f" ({dataset.num_episodes} episodes, {dataset.num_frames} frames)"
             )
-
-            summary_entries.append(
-                {
-                    "episode": ep,
-                    "task_id": task_id,
-                    "task_description": task_desc,
-                    "success": result["success"],
-                    "n_steps": result["n_steps"],
-                    "mean_distance": result["mean_distance"],
-                }
-            )
-            all_results.append(result)
-
-        vec_env.close()
-
-    # Save summary
-    with open(output_dir / "summary.json", "w") as f:
-        json.dump(summary_entries, f, indent=2)
 
     print(f"\nOutputs saved to {output_dir}")
 
