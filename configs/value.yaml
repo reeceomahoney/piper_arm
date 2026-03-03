@@ -7,7 +7,6 @@ value:
   max_state_dim: 8
   n_bins: 201
 batch_size: 32
-lr: 1e-4
 total_steps: 50000
 output_dir: outputs/value
 wandb_project: piper-value

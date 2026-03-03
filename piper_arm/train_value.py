@@ -15,6 +15,7 @@ import draccus
 import torch
 import torch.nn.functional as F
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 from lerobot.policies.smolvla.modeling_smolvla import pad_vector, resize_with_pad
 from torch.utils.data import DataLoader
 
@@ -31,13 +32,7 @@ class TrainValueConfig:
 
     # Training
     batch_size: int = 32
-    lr: float = 1e-4
-    weight_decay: float = 1e-10
     total_steps: int = 50_000
-    warmup_steps: int = 500
-    grad_clip: float = 10.0
-    use_amp: bool = True
-    gradient_checkpointing: bool = True
 
     # Logging & checkpointing
     log_interval: int = 50
@@ -159,7 +154,7 @@ def main(cfg: TrainValueConfig):
 
     # Auto-detect max episode length from steps_remaining
     all_steps = dataset.hf_dataset["steps_remaining"]
-    max_episode_length = max(s[0] for s in all_steps) + 1
+    max_episode_length = max(s.item() for s in all_steps) + 1
     print(f"Max episode length: {max_episode_length}")
     print(f"Dataset: {dataset.num_episodes} episodes, {dataset.num_frames} frames")
 
@@ -177,19 +172,14 @@ def main(cfg: TrainValueConfig):
     model = model.to(device)
     tokenizer = model.vlm_with_expert.processor.tokenizer
 
-    # ── Optimizer ──
+    # ── Optimizer & scheduler (SmolVLA presets) ──
+    smolvla_cfg = SmolVLAConfig()
+    optimizer_cfg = smolvla_cfg.get_optimizer_preset()
+    scheduler_cfg = smolvla_cfg.get_scheduler_preset()
+
     params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(params, lr=cfg.lr, weight_decay=cfg.weight_decay)
-
-    # Linear warmup then constant LR
-    def lr_lambda(step: int) -> float:
-        if step < cfg.warmup_steps:
-            return step / max(cfg.warmup_steps, 1)
-        return 1.0
-
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-    scaler = torch.amp.GradScaler(enabled=cfg.use_amp)
-
+    optimizer = optimizer_cfg.build(params)
+    scheduler = scheduler_cfg.build(optimizer, num_training_steps=cfg.total_steps)
     # ── Training loop ──
     model.train()
     data_iter = iter(itertools.cycle(loader))  # type: ignore[arg-type]
@@ -201,16 +191,13 @@ def main(cfg: TrainValueConfig):
             batch, cfg, device, tokenizer, max_episode_length
         )
 
-        with torch.amp.autocast("cuda", enabled=cfg.use_amp):
-            logits = model(images, img_masks, lang_tokens, lang_masks, state)
-            targets = ValueModel.returns_to_bins(returns, cfg.value.n_bins)
-            loss = F.cross_entropy(logits, targets)
+        logits = model(images, img_masks, lang_tokens, lang_masks, state)
+        targets = ValueModel.returns_to_bins(returns, cfg.value.n_bins)
+        loss = F.cross_entropy(logits, targets)
 
-        scaler.scale(loss).backward()  # type: ignore[union-attr]
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(params, cfg.grad_clip)
-        scaler.step(optimizer)
-        scaler.update()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(params, optimizer_cfg.grad_clip_norm)
+        optimizer.step()
         optimizer.zero_grad()
         scheduler.step()
 
