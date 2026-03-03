@@ -2,11 +2,6 @@ Bootstrap: docker
 From: python:3.10-slim
 
 %files
-    pyproject.toml /opt/piper_arm/pyproject.toml
-    uv.lock /opt/piper_arm/uv.lock
-    README.md /opt/piper_arm/README.md
-    piper_arm /opt/piper_arm/piper_arm
-
     # To get EGL working
     egl_vendor.d/10_nvidia.json /usr/share/glvnd/egl_vendor.d/10_nvidia.json
 
@@ -17,20 +12,10 @@ From: python:3.10-slim
         libosmesa6-dev libglfw3 \
     && rm -rf /var/lib/apt/lists/*
 
-    # Main install
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="/root/.local/bin:$PATH"
-    cd /opt/piper_arm && uv sync --frozen
-
-    # Pi specific install
-    uv pip uninstall transformers
-    uv pip install "lerobot[pi] @ git+https://github.com/huggingface/lerobot.git"
-
-    # Suppress robotsuite warning
-    /opt/piper_arm/.venv/bin/python -m robosuite.scripts.setup_macros
 
 %environment
-    export PATH="/opt/piper_arm/.venv/bin:/root/.local/bin:$PATH"
+    export PATH="/root/.local/bin:$PATH"
     export PYTHONDONTWRITEBYTECODE=1
     export PYTHONUNBUFFERED=1
     export MUJOCO_GL=egl
@@ -46,4 +31,6 @@ From: python:3.10-slim
     export TORCHINDUCTOR_CACHE_DIR=$CACHE_DIR/torchinductor
 
 %runscript
+    uv sync --frozen
+    . .venv/bin/activate
     exec "$@"
