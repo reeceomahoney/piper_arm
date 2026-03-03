@@ -33,7 +33,7 @@ from lerobot.scripts.lerobot_eval import eval_policy_all
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
-from piper_arm.train_value import compute_returns
+from piper_arm.train_value import TrainValueConfig, compute_returns  # noqa: F401
 from piper_arm.value_model import ValueConfig, ValueModel
 
 
