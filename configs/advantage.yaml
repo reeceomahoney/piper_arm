@@ -1,0 +1,13 @@
+policy_repo_id: reece-omahoney/smolvla-libero-16-chunk
+value_checkpoint: outputs/value/checkpoint_final.pt
+dataset_repo_id: reece-omahoney/libero-10-maha
+advantage_percentile: 0.3
+advantage_dropout: 0.3
+c_fail: 1000.0
+batch_size: 32
+total_steps: 50000
+eval_freq: 10000
+eval_n_episodes: 10
+eval_batch_size: 1
+output_dir: outputs/advantage
+wandb_project: piper-advantage
