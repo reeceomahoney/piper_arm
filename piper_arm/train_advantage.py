@@ -561,14 +561,30 @@ def main(cfg: TrainAdvantageConfig):
                 f"  avg_reward={avg_reward:.3f}  eval_s={eval_s:.1f}s"
             )
             if cfg.wandb_project:
-                wandb.log(  # type: ignore[possibly-undefined]
-                    {
-                        "eval/pc_success": pc_success,
-                        "eval/avg_sum_reward": avg_reward,
-                        "eval/eval_s": eval_s,
-                    },
-                    step=step,
-                )
+                eval_log: dict = {
+                    "eval/pc_success": pc_success,
+                    "eval/avg_sum_reward": avg_reward,
+                    "eval/eval_s": eval_s,
+                }
+                # Log per-task success rates
+                for task_info in eval_info.get("per_task", []):
+                    task_id = task_info["task_id"]
+                    metrics = task_info["metrics"]
+                    successes = metrics["successes"]
+                    if successes:
+                        eval_log[f"eval/task_{task_id}/pc_success"] = (
+                            sum(successes) / len(successes) * 100
+                        )
+                        eval_log[f"eval/task_{task_id}/avg_sum_reward"] = sum(
+                            metrics["sum_rewards"]
+                        ) / len(metrics["sum_rewards"])
+                # Log eval video
+                video_paths = overall.get("video_paths", [])
+                if video_paths:
+                    eval_log["eval/video"] = wandb.Video(  # type: ignore[possibly-undefined]
+                        video_paths[0], fps=fps, format="mp4"
+                    )
+                wandb.log(eval_log, step=step)  # type: ignore[possibly-undefined]
 
     # Close eval environments
     if eval_env:
