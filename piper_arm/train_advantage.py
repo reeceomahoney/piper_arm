@@ -409,7 +409,12 @@ def main(cfg: TrainAdvantageConfig):
             if k in batch
         }
         batch = preprocessor(batch)
-        batch.update(extra_keys)
+        batch.update(
+            {
+                k: v.to(device) if isinstance(v, Tensor) else v
+                for k, v in extra_keys.items()
+            }
+        )
 
         # Compute advantage labels for this batch
         with torch.no_grad():
