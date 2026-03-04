@@ -56,7 +56,7 @@ class TrainAdvantageConfig:
 
     log_interval: int = 50
     save_interval: int = 5000
-    eval_freq: int = 10_000
+    eval_freq: int = 5_000
     eval_n_episodes: int = 10
     eval_batch_size: int = 1
     output_dir: str = "outputs/advantage"
