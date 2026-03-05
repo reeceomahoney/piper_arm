@@ -13,15 +13,12 @@ from dataclasses import dataclass
 import draccus
 import torch
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.policies.smolvla.modeling_smolvla import pad_vector, resize_with_pad
+from torch import Tensor
 from torch.utils.data import DataLoader
 
-from piper_arm.train_advantage import (
-    _prepare_value_inputs,
-    compute_advantage_thresholds,
-    load_value_model,
-)
-from piper_arm.train_value import compute_returns
-from piper_arm.value_model import ValueModel
+from piper_arm.train_value import TrainValueConfig, compute_returns  # noqa: F401
+from piper_arm.value_model import ValueConfig, ValueModel
 
 
 @dataclass
@@ -35,6 +32,127 @@ class ComputeAdvantageLabelsConfig:
     num_workers: int = 4
     push_to_hub: bool = False
     output_repo_id: str | None = None
+
+
+def load_value_model(checkpoint_path: str, device: torch.device) -> ValueModel:
+    """Load a trained value model from checkpoint."""
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    cfg: ValueConfig = ckpt["config"].value
+    model = ValueModel(cfg)
+    model.load_state_dict(ckpt["model_state_dict"])
+    model = model.to(device)
+    model.eval()
+    for p in model.parameters():
+        p.requires_grad = False
+    return model
+
+
+def prepare_value_inputs(
+    batch: dict[str, Tensor],
+    value_model: ValueModel,
+    tokenizer,
+    device: torch.device,
+) -> tuple[list[Tensor], list[Tensor], Tensor, Tensor, Tensor]:
+    """Prepare a batch for the value model.
+
+    Handles image preprocessing (resize, normalize), state padding,
+    and language tokenization.
+
+    Returns:
+        (images, img_masks, lang_tokens, lang_masks, state)
+    """
+    img_keys = sorted(k for k in batch if k.startswith("observation.images."))
+    images = []
+    img_masks = []
+    for key in img_keys:
+        img = batch[key]
+        img = img[:, -1] if img.ndim == 5 else img
+        img = img.to(device)
+        w, h = value_model.config.resize_imgs_with_padding
+        img = resize_with_pad(img, w, h, pad_value=-1)
+        img = img * 2.0 - 1.0
+        images.append(img)
+        img_masks.append(torch.ones(img.shape[0], dtype=torch.bool, device=device))
+
+    state = batch["observation.state"]
+    state = state[:, -1] if state.ndim > 2 else state
+    state = state.to(device)
+    state = pad_vector(state, value_model.config.max_state_dim)
+
+    task_texts = batch["task"]
+    tokenized = tokenizer(
+        task_texts,
+        padding="longest",
+        truncation=True,
+        max_length=value_model.config.tokenizer_max_length,
+        return_tensors="pt",
+    )
+    lang_tokens = tokenized["input_ids"].to(device)
+    lang_masks = tokenized["attention_mask"].bool().to(device)
+
+    return images, img_masks, lang_tokens, lang_masks, state
+
+
+def compute_advantage_thresholds(
+    dataset: LeRobotDataset,
+    value_model: ValueModel,
+    c_fail: float,
+    device: torch.device,
+    batch_size: int = 64,
+) -> dict[str, float]:
+    """Compute per-task advantage thresholds (30th percentile).
+
+    Iterates over the full dataset, computes V(s) and ground-truth returns,
+    then finds the advantage percentile threshold per task.
+    """
+    all_steps = dataset.hf_dataset["steps_remaining"]
+    max_ep_len = max(s.item() for s in all_steps) + 1
+    tokenizer = value_model.vlm_with_expert.processor.tokenizer
+
+    loader = DataLoader(
+        dataset,  # type: ignore[arg-type]
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True,
+        drop_last=False,
+    )
+
+    task_advantages: dict[str, list[float]] = {}
+
+    for batch in loader:
+        images, img_masks, lang_tokens, lang_masks, state = prepare_value_inputs(
+            batch, value_model, tokenizer, device
+        )
+
+        returns = compute_returns(
+            batch["steps_remaining"].to(device),
+            batch["success"].to(device),
+            max_ep_len,
+            c_fail,
+        )
+
+        with torch.no_grad():
+            logits = value_model(images, img_masks, lang_tokens, lang_masks, state)
+            values = value_model.predict_value(logits)
+
+        advantages = (returns - values).cpu().tolist()
+
+        for i, task in enumerate(batch["task"]):
+            if task not in task_advantages:
+                task_advantages[task] = []
+            task_advantages[task].append(advantages[i])
+
+    # Compute percentile threshold per task
+    thresholds: dict[str, float] = {}
+    for task, advs in task_advantages.items():
+        advs_t = torch.tensor(advs)
+        thresholds[task] = torch.quantile(advs_t, 0.3).item()
+        print(
+            f"  Task: {task[:60]:60s}  threshold={thresholds[task]:.4f}  n={len(advs)}"
+        )
+
+    return thresholds
 
 
 def compute_all_labels(
@@ -66,7 +184,7 @@ def compute_all_labels(
     all_labels: list[int] = []
 
     for batch in loader:
-        images, img_masks, lang_tokens, lang_masks, state = _prepare_value_inputs(
+        images, img_masks, lang_tokens, lang_masks, state = prepare_value_inputs(
             batch, value_model, tokenizer, device
         )
 
@@ -107,9 +225,9 @@ def main(cfg: ComputeAdvantageLabelsConfig):
     print(f"Dataset: {dataset.num_episodes} episodes, {dataset.num_frames} frames")
     print(f"Max episode length: {max_episode_length}")
 
-    # Load value model (return type annotation is wrong — it returns just the model)
+    # Load value model
     print("Loading value model...")
-    value_model: ValueModel = load_value_model(cfg.value_checkpoint, device)  # type: ignore[assignment]
+    value_model: ValueModel = load_value_model(cfg.value_checkpoint, device)
 
     # Compute per-task thresholds
     print("Computing per-task advantage thresholds...")
