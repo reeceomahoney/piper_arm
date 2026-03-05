@@ -120,7 +120,11 @@ def compute_advantage_thresholds(
 
     task_advantages: dict[str, list[float]] = {}
 
-    for batch in loader:
+    total_batches = len(loader)
+    for batch_idx, batch in enumerate(loader):
+        if batch_idx % 10 == 0 or batch_idx == total_batches - 1:
+            print(f"  [thresholds] batch {batch_idx + 1}/{total_batches}", flush=True)
+
         images, img_masks, lang_tokens, lang_masks, state = prepare_value_inputs(
             batch, value_model, tokenizer, device
         )
@@ -183,7 +187,11 @@ def compute_all_labels(
 
     all_labels: list[int] = []
 
-    for batch in loader:
+    total_batches = len(loader)
+    for batch_idx, batch in enumerate(loader):
+        if batch_idx % 10 == 0 or batch_idx == total_batches - 1:
+            print(f"  [labels] batch {batch_idx + 1}/{total_batches}", flush=True)
+
         images, img_masks, lang_tokens, lang_masks, state = prepare_value_inputs(
             batch, value_model, tokenizer, device
         )
@@ -257,7 +265,7 @@ def main(cfg: ComputeAdvantageLabelsConfig):
 
     # Add column to dataset
     print("Adding advantage_label column to dataset...")
-    dataset.hf_dataset = dataset.hf_dataset.add_column("advantage_label", labels)
+    dataset.hf_dataset = dataset.hf_dataset.add_column("advantage_label", labels)  # type: ignore[call-arg]
 
     # Save locally
     save_path = dataset.root
