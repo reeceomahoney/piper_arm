@@ -32,9 +32,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv.sources]
-lerobot_robot_piper = { path = "lerobot_robot_piper" }
-lerobot_teleoperator_piper = { path = "lerobot_teleoperator_piper" }
-lerobot_policy_advantage = { path = "lerobot_policy_advantage" }
+lerobot_robot_piper = { path = "lerobot_robot_piper", editable = true }
+lerobot_teleoperator_piper = { path = "lerobot_teleoperator_piper", editable = true }
+lerobot_policy_advantage = { path = "lerobot_policy_advantage", editable = true }
 
 [tool.hatch.metadata]
 allow-direct-references = true

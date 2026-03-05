@@ -19,6 +19,7 @@ from lerobot.utils.constants import OBS_IMAGES
 class AdvantageConfig(PreTrainedConfig):
     # Advantage-specific
     advantage_dropout: float = 0.3
+    smolvla_checkpoint: str | None = None
 
     # SmolVLA fields (mirrored so lerobot-train can set them via YAML)
     n_obs_steps: int = 1

@@ -6,10 +6,13 @@ During training, reads pre-computed `advantage_label` from the batch.
 During inference, always injects a positive advantage token.
 """
 
+import logging
 from collections import deque
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+from huggingface_hub import snapshot_download
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.smolvla.modeling_smolvla import (
     VLAFlowMatching,
@@ -65,7 +68,33 @@ class AdvantagePolicy(PreTrainedPolicy):
         vlm_hidden = self.model.vlm_with_expert.config.text_config.hidden_size
         self.adv_embedding = AdvantageEmbedding(vlm_hidden)
 
+        if config.smolvla_checkpoint is not None:
+            self.load_smolvla_weights(config.smolvla_checkpoint)
+
         self.reset()
+
+    def load_smolvla_weights(self, smolvla_path: str):
+        """Load VLAFlowMatching weights from a SmolVLA checkpoint."""
+        from safetensors.torch import load_file
+
+        checkpoint_dir = Path(smolvla_path)
+        if not checkpoint_dir.exists():
+            logging.info(f"Downloading SmolVLA checkpoint from {smolvla_path}...")
+            checkpoint_dir = Path(snapshot_download(smolvla_path))
+
+        weights = load_file(str(checkpoint_dir / "model.safetensors"))
+
+        state = self.state_dict()
+        loaded = 0
+        for key, tensor in weights.items():
+            if key in state and state[key].shape == tensor.shape:
+                state[key] = tensor
+                loaded += 1
+
+        self.load_state_dict(state)
+        logging.info(
+            f"Loaded {loaded}/{len(weights)} SmolVLA weights from {smolvla_path}"
+        )
 
     def reset(self):
         self.queues = {ACTION: deque(maxlen=self.config.n_action_steps)}
