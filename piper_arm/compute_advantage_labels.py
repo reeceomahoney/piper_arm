@@ -122,7 +122,7 @@ def compute_advantage_thresholds(
 
     total_batches = len(loader)
     for batch_idx, batch in enumerate(loader):
-        if batch_idx % 10 == 0 or batch_idx == total_batches - 1:
+        if batch_idx % 100 == 0 or batch_idx == total_batches - 1:
             print(f"  [thresholds] batch {batch_idx + 1}/{total_batches}", flush=True)
 
         images, img_masks, lang_tokens, lang_masks, state = prepare_value_inputs(
@@ -189,7 +189,7 @@ def compute_all_labels(
 
     total_batches = len(loader)
     for batch_idx, batch in enumerate(loader):
-        if batch_idx % 10 == 0 or batch_idx == total_batches - 1:
+        if batch_idx % 100 == 0 or batch_idx == total_batches - 1:
             print(f"  [labels] batch {batch_idx + 1}/{total_batches}", flush=True)
 
         images, img_masks, lang_tokens, lang_masks, state = prepare_value_inputs(
@@ -270,6 +270,7 @@ def main(cfg: ComputeAdvantageLabelsConfig):
     # Save locally
     save_path = dataset.root
     print(f"Saving dataset to {save_path}...")
+    dataset.hf_dataset.reset_format()
     dataset.hf_dataset.save_to_disk(str(save_path / "train"))
 
     # Push to hub
