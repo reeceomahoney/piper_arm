@@ -8,9 +8,11 @@ Usage:
     python -m piper_arm.compute_advantage_labels
 """
 
+import json
 from dataclasses import dataclass
 
 import draccus
+import pandas as pd
 import torch
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.smolvla.modeling_smolvla import pad_vector, resize_with_pad
@@ -263,15 +265,33 @@ def main(cfg: ComputeAdvantageLabelsConfig):
         f"Labels computed: {pct_positive:.1f}% positive ({sum(labels)}/{len(labels)})"
     )
 
-    # Add column to dataset
-    print("Adding advantage_label column to dataset...")
-    dataset.hf_dataset = dataset.hf_dataset.add_column("advantage_label", labels)  # type: ignore[call-arg]
+    # Save by overwriting parquet files with the new column added
+    data_dir = dataset.root / "data"
+    print(f"Saving advantage_label to parquet files in {data_dir}...")
+    offset = 0
+    for pq_path in sorted(data_dir.glob("*/*.parquet")):
+        df = pd.read_parquet(pq_path)
+        n = len(df)
+        df["advantage_label"] = labels[offset : offset + n]
+        offset += n
+        df.to_parquet(pq_path, compression="snappy", index=False)
+    assert offset == len(
+        labels
+    ), f"Parquet files had {offset} rows, expected {len(labels)}"
 
-    # Save locally
-    save_path = dataset.root
-    print(f"Saving dataset to {save_path}...")
-    dataset.hf_dataset.reset_format()
-    dataset.hf_dataset.save_to_disk(str(save_path / "train"))
+    # Update info.json to register the new feature
+    info_path = dataset.root / "meta" / "info.json"
+    with open(info_path) as f:
+        info = json.load(f)
+    if "advantage_label" not in info.get("features", {}):
+        info["features"]["advantage_label"] = {
+            "dtype": "int64",
+            "shape": [1],
+            "names": None,
+        }
+        with open(info_path, "w") as f:
+            json.dump(info, f, indent=4)
+        print("Updated info.json with advantage_label feature")
 
     # Push to hub
     if cfg.push_to_hub:

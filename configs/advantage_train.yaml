@@ -14,6 +14,7 @@ env:
 
 policy:
   type: advantage
+  repo_id: reece-omahoney/smolvla-libero-advantage
   pretrained_path: reece-omahoney/smolvla-libero-16-chunk
   advantage_dropout: 0.3
   device: cuda
@@ -31,3 +32,4 @@ eval:
 wandb:
   enable: true
   disable_artifact: true
+  project: distal
