@@ -22,7 +22,6 @@ train-value:
 	python -m piper_arm.train_value --config_path configs/value.yaml
 
 train-advantage:
-	python -m piper_arm.compute_advantage_labels
 	lerobot-train --config_path configs/advantage_train.yaml
 
 ############

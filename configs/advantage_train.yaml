@@ -2,7 +2,7 @@ job_name: smolvla-libero-advantage
 num_workers: 8
 batch_size: 32
 steps: 50_000
-eval_freq: 5_000
+eval_freq: 10_000
 
 dataset:
   repo_id: reece-omahoney/libero-10-maha
@@ -10,6 +10,7 @@ dataset:
 env:
   type: libero
   task: libero_10
+  task_ids: [9]
   fps: 10
 
 policy:
