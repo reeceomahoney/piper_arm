@@ -17,6 +17,7 @@ policy:
   type: advantage
   repo_id: reece-omahoney/smolvla-libero-advantage
   smolvla_checkpoint: reece-omahoney/smolvla-libero-16-chunk
+  stats_repo_id: reece-omahoney/libero
   advantage_dropout: 0.3
   device: cuda
   chunk_size: 16

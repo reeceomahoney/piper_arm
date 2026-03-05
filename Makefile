@@ -16,7 +16,7 @@ finetune:
 
 eval:
 	lerobot-eval --config_path configs/eval.yaml \
-		--policy.path=lerobot/pi05_libero_finetuned
+		--policy.path=reece-omahoney/smolvla-libero-16-chunk
 
 train-value:
 	python -m piper_arm.train_value --config_path configs/value.yaml

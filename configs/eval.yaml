@@ -3,6 +3,7 @@
 env:
   type: libero
   task: libero_10
+  task_ids: [9]
   fps: 10
 
 eval:
