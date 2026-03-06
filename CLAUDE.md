@@ -50,7 +50,8 @@ The system implements a RECAP-style RL pipeline:
 
 1. **eval_dist.py** — Evaluate policy in LIBERO sim, create LeRobot dataset with `maha_distance`, `steps_remaining`, `success` fields.
 2. **train_value.py** — Train distributional value function (SmolVLM + expert backbone, cross-entropy over discretized return bins).
-3. **train_advantage.py** — Fine-tune SmolVLA with binary advantage conditioning. Uses value model to compute per-timestep advantages, binarizes at per-task 30th percentile, 30% advantage token dropout for classifier-free guidance. Includes built-in LIBERO evaluation and push-to-hub.
+3. **compute_advantage_labels.py** — Pre-compute binary advantage labels using the trained value model. Computes per-task advantage thresholds (30th percentile), binarizes per-sample advantages, and writes an `advantage_label` column directly into the dataset's parquet files.
+4. **lerobot-train (advantage_train.yaml)** — Fine-tune SmolVLA with binary advantage conditioning using the pre-labelled dataset. 30% advantage token dropout for classifier-free guidance.
 
 ### Supporting Modules (`piper_arm/`)
 
@@ -78,7 +79,7 @@ YAML configs in `configs/` drive all workflows:
 - `train.yaml` — Dataset, policy type, training hyperparameters, W&B logging
 - `eval.yaml` — Evaluation settings (policy args via CLI override)
 - `value.yaml` — Value function training (dataset, SmolVLM model, expert scaling, bin count)
-- `advantage.yaml` — Advantage training (policy repo, value checkpoint, advantage percentile/dropout, eval settings)
+- `advantage_train.yaml` — Advantage-conditioned policy fine-tuning (policy repo, advantage dropout, eval settings)
 - `play.yaml` / `record.yaml` — Hardware interaction settings
 
 ### Deployment
