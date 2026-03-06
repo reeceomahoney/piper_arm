@@ -35,8 +35,8 @@ class TrainValueConfig:
     total_steps: int = 40_000
 
     # Logging & checkpointing
-    log_interval: int = 50
-    save_interval: int = 5000
+    log_interval: int = 100
+    save_interval: int = 10_000
     output_dir: str = "outputs/value"
     wandb_project: str | None = "piper-value"
     wandb_run_name: str | None = None
