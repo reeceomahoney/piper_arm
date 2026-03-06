@@ -44,7 +44,7 @@ class EvalDistConfig:
     policy_path: str = "reece-omahoney/smolvla-libero-16-chunk"
     base_dataset_repo_id: str = "reece-omahoney/libero"
     n_episodes: int = 150
-    n_envs: int = 1
+    n_envs: int = 16
     batch_size: int = 32
     num_workers: int = 8
     load_stats: str | None = "outputs/eval_dist/2026-03-02/13-11-13/gauss_stats.npz"
