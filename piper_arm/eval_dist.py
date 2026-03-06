@@ -19,6 +19,7 @@ Usage:
 """
 
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +44,7 @@ class EvalDistConfig:
     policy_path: str = "reece-omahoney/smolvla-libero-16-chunk"
     base_dataset_repo_id: str = "reece-omahoney/libero"
     n_episodes: int = 150
+    n_envs: int = 1
     batch_size: int = 32
     num_workers: int = 8
     load_stats: str | None = "outputs/eval_dist/2026-03-02/13-11-13/gauss_stats.npz"
@@ -59,7 +61,7 @@ def main(cfg: EvalDistConfig):
     policy_cfg = PreTrainedConfig.from_pretrained(cfg.policy_path)
     policy_cfg.pretrained_path = Path(cfg.policy_path)
 
-    envs = make_env(env_cfg, n_envs=1)
+    envs = make_env(env_cfg, n_envs=cfg.n_envs)
 
     policy = make_policy(cfg=policy_cfg, env_cfg=env_cfg)
     assert isinstance(policy, (PI05Policy, SmolVLAPolicy))
@@ -120,6 +122,7 @@ def main(cfg: EvalDistConfig):
 
     # ── Phase 2: Rollout with capture ──
     all_results: list[dict[str, Any]] = []
+    t_start = time.monotonic()
 
     try:
         for task_id, vec_env in envs[suite_name].items():
@@ -127,8 +130,10 @@ def main(cfg: EvalDistConfig):
             n_tasks = len(envs[suite_name])
             print(f"\n=== Task {task_id + 1}/{n_tasks}: {task_desc} ===")
 
-            for ep in range(cfg.n_episodes):
-                result = rollout(
+            ep = 0
+            while ep < cfg.n_episodes:
+                batch_seeds = list(range(ep, ep + cfg.n_envs))
+                batch_results = rollout(
                     policy=policy,
                     vec_env=vec_env,
                     preprocessor=preprocessor,
@@ -137,30 +142,37 @@ def main(cfg: EvalDistConfig):
                     env_postprocessor=env_postprocessor,
                     gauss_mean=gauss_mean,
                     gauss_cov_inv=gauss_cov_inv,
-                    seed=ep,
-                    desc=f"  Ep {ep}",
+                    seeds=batch_seeds,
+                    desc=f"  Ep {ep}-{ep + cfg.n_envs - 1}",
                 )
 
-                # Build LeRobot dataset incrementally
-                if dataset is not None:
-                    n_frames = len(result["observations"])
-                    for frame_idx in range(n_frames):
-                        frame = build_frame(
-                            result["observations"][frame_idx],
-                            result["actions"][frame_idx],
-                            dataset.meta.features,
-                        )
-                        frame["task"] = task_desc
-                        frame["steps_remaining"] = np.array(
-                            [n_frames - frame_idx - 1], dtype=np.int32
-                        )
-                        frame["success"] = np.array([result["success"]], dtype=bool)
-                        dataset.add_frame(frame)
-                    dataset.save_episode()
+                for i, result in enumerate(batch_results):
+                    ep_num = ep + i
+                    if ep_num >= cfg.n_episodes:
+                        break
 
-                status = "OK" if result["success"] else "FAIL"
-                print(f"  Episode {ep}: {status}")
-                all_results.append(result)
+                    # Build LeRobot dataset incrementally
+                    if dataset is not None:
+                        n_frames = len(result["observations"])
+                        for frame_idx in range(n_frames):
+                            frame = build_frame(
+                                result["observations"][frame_idx],
+                                result["actions"][frame_idx],
+                                dataset.meta.features,
+                            )
+                            frame["task"] = task_desc
+                            frame["steps_remaining"] = np.array(
+                                [n_frames - frame_idx - 1], dtype=np.int32
+                            )
+                            frame["success"] = np.array([result["success"]], dtype=bool)
+                            dataset.add_frame(frame)
+                        dataset.save_episode()
+
+                    status = "OK" if result["success"] else "FAIL"
+                    print(f"  Episode {ep_num}: {status}")
+                    all_results.append(result)
+
+                ep += cfg.n_envs
 
             vec_env.close()
     finally:
@@ -171,7 +183,9 @@ def main(cfg: EvalDistConfig):
                 f" ({dataset.num_episodes} episodes, {dataset.num_frames} frames)"
             )
 
-    print(f"\nOutputs saved to {output_dir}")
+    elapsed = time.monotonic() - t_start
+    print(f"\nTotal time: {elapsed:.1f}s ({elapsed / 60:.1f}min)")
+    print(f"Outputs saved to {output_dir}")
 
     # ── Plot ──
     plot_traces(all_results, output_dir)

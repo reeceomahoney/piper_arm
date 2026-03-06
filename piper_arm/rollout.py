@@ -48,27 +48,31 @@ def rollout(
     env_postprocessor: Any,
     gauss_mean: np.ndarray,
     gauss_cov_inv: np.ndarray,
-    seed: int,
+    seeds: list[int],
     desc: str = "",
-) -> dict[str, Any]:
-    """Run a single episode, capturing full observations, actions, and
-    Mahalanobis traces.
+) -> list[dict[str, Any]]:
+    """Run episodes for all envs in parallel, capturing observations, actions,
+    and Mahalanobis traces.
 
-    No interventions — the episode runs to completion or truncation.
+    Each env runs independently; collection stops per-env when it terminates.
+
+    Args:
+        seeds: One seed per env. len(seeds) must equal the number of envs in vec_env.
 
     Returns:
-        Dict with keys: success, trace_distances,
+        List of dicts (one per env) with keys: success, trace_distances,
         actions (list of Tensor), observations (list of dicts).
     """
+    n_envs = len(seeds)
     max_steps = vec_env.call("_max_episode_steps")[0]
-    observation, info = vec_env.reset(seed=[seed])
+    observation, _ = vec_env.reset(seed=seeds)
     policy.reset()
 
-    success = False
-    done = False
-    trace_distances: list[float] = []
-    actions: list[torch.Tensor] = []
-    observations: list[dict[str, torch.Tensor]] = []
+    active = [True] * n_envs
+    results: list[dict[str, Any]] = [
+        {"success": False, "trace_distances": [], "actions": [], "observations": []}
+        for _ in range(n_envs)
+    ]
 
     for _ in tqdm(
         range(max_steps),
@@ -76,7 +80,7 @@ def rollout(
         leave=False,
         disable=inside_slurm(),
     ):
-        if done:
+        if not any(active):
             break
 
         observation = preprocess_observation(observation)
@@ -88,21 +92,26 @@ def rollout(
         with torch.inference_mode():
             emb = embed_prefix_pooled(policy, observation)
             emb_np = emb.cpu().numpy()
-            dist = compute_mahalanobis_np(emb_np, gauss_mean, gauss_cov_inv)
-            dist_val = dist[0].item()
-            trace_distances.append(dist_val)
+            dists = compute_mahalanobis_np(emb_np, gauss_mean, gauss_cov_inv)
             action = policy.select_action(observation)
 
-        # Save frame data
-        raw_obs = {
-            k: v[0].cpu() if isinstance(v, torch.Tensor) else v
-            for k, v in raw_obs.items()
-        }
-        raw_obs["maha_distance"] = np.array([dist_val], dtype=np.float32)
-        observations.append(raw_obs)
+        for i in range(n_envs):
+            if not active[i]:
+                continue
+            obs_i = {
+                k: v[i].cpu() if isinstance(v, torch.Tensor) else v
+                for k, v in raw_obs.items()
+            }
+            dist_val = float(dists[i])
+            obs_i["maha_distance"] = np.array([dist_val], dtype=np.float32)
+            results[i]["observations"].append(obs_i)
+            results[i]["trace_distances"].append(dist_val)
 
         action = postprocessor(action)
-        actions.append(action[0].cpu())
+        for i in range(n_envs):
+            if active[i]:
+                results[i]["actions"].append(action[i].cpu())
+
         action_transition = {ACTION: action}
         action_transition = env_postprocessor(action_transition)
         action_np = action_transition[ACTION].to("cpu").numpy()
@@ -110,17 +119,21 @@ def rollout(
         observation, _, terminated, truncated, info = vec_env.step(action_np)
 
         if "final_info" in info:
-            if info["final_info"]["is_success"].item():
-                success = True
+            is_success = info["final_info"].get("is_success")
+            if is_success is not None:
+                for i in range(n_envs):
+                    if active[i] and (bool(terminated[i]) or bool(truncated[i])):
+                        val = is_success[i] if hasattr(is_success, "__len__") else is_success
+                        if hasattr(val, "item"):
+                            val = val.item()
+                        if val:
+                            results[i]["success"] = True
 
-        done = bool(terminated | truncated)
+        for i in range(n_envs):
+            if active[i] and (bool(terminated[i]) or bool(truncated[i])):
+                active[i] = False
 
-    return {
-        "success": success,
-        "trace_distances": trace_distances,
-        "actions": actions,
-        "observations": observations,
-    }
+    return results
 
 
 def plot_traces(results: list[dict], output_dir: Path) -> None:
