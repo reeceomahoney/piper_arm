@@ -50,7 +50,7 @@ class ValueModel(nn.Module):
             num_vlm_layers=config.num_vlm_layers,
             self_attn_every_n_layers=config.self_attn_every_n_layers,
             expert_width_multiplier=config.expert_width_multiplier,
-            device="auto",
+            device="cpu",
         )
 
         vlm_hidden = self.vlm_with_expert.config.text_config.hidden_size
