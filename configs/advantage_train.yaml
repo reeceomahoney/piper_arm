@@ -1,7 +1,7 @@
 job_name: smolvla-libero-advantage
 num_workers: 8
 batch_size: 32
-steps: 50_000
+steps: 100_000
 eval_freq: 10_000
 
 dataset:
@@ -29,8 +29,8 @@ policy:
   max_action_dim: 7
 
 eval:
-  n_episodes: 25
-  batch_size: 5
+  n_episodes: 50
+  batch_size: 10
 
 wandb:
   enable: true
