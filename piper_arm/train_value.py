@@ -143,7 +143,7 @@ def main(cfg: TrainValueConfig):
         output_dir = Path(cfg.output_dir)
     else:
         output_dir = (
-            Path("outputs/train") / now.strftime("%Y-%m-%d") / now.strftime("%H-%M-%S")
+            Path("outputs/value") / now.strftime("%Y-%m-%d") / now.strftime("%H-%M-%S")
         )
     output_dir.mkdir(parents=True, exist_ok=True)
 
