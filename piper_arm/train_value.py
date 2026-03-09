@@ -8,11 +8,13 @@ Usage:
 """
 
 import itertools
+import random
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 import draccus
+import numpy as np
 import torch
 import torch.nn.functional as F
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -43,6 +45,7 @@ class TrainValueConfig:
     wandb_run_name: str | None = None
 
     num_workers: int = 4
+    seed: int = 42
 
 
 def compute_returns(
@@ -137,6 +140,12 @@ def prepare_batch(
 
 @draccus.wrap()  # type: ignore[misc]
 def main(cfg: TrainValueConfig):
+    random.seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    torch.manual_seed(cfg.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(cfg.seed)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     now = datetime.now()
     if cfg.output_dir:
