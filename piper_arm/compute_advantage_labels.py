@@ -22,13 +22,16 @@ import torch
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from torch.utils.data import DataLoader
 
-from piper_arm.train_value import load_value_preprocessor
+from piper_arm.train_value import (  # noqa: F401
+    TrainValueConfig,
+    load_value_preprocessor,
+)
 from piper_arm.value_model import ValueConfig, ValueModel
 
 
 @dataclass
 class ComputeAdvantageLabelsConfig:
-    value_checkpoint: str = "outputs/value/checkpoint_final.pt"
+    value_checkpoint: str = "outputs/value/2026-03-10/14-29-58/checkpoint_40000.pt"
     pretrained_path: str = "reece-omahoney/smolvla-libero-16-chunk"
     dataset_repo_id: str = "reece-omahoney/libero-10-maha"
     dataset_root: str | None = None
@@ -37,8 +40,7 @@ class ComputeAdvantageLabelsConfig:
     advantage_percentile: float = 0.3
     batch_size: int = 64
     num_workers: int = 4
-    push_to_hub: bool = False
-    output_repo_id: str | None = None
+    push_to_hub: bool = True
 
 
 def load_value_model(checkpoint_path: str, device: torch.device) -> ValueModel:
@@ -285,9 +287,8 @@ def main(cfg: ComputeAdvantageLabelsConfig):
 
     # Push to hub
     if cfg.push_to_hub:
-        repo_id = cfg.output_repo_id or cfg.dataset_repo_id
-        print(f"Pushing dataset to {repo_id}...")
-        dataset.push_to_hub(repo_id=repo_id)
+        print("Pushing dataset...")
+        dataset.push_to_hub()
 
     print("Done.")
 
