@@ -15,6 +15,7 @@ from pathlib import Path
 import draccus
 import numpy as np
 import rerun as rr
+import rerun.blueprint as rrb
 import torch
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.envs.configs import LiberoEnv as LiberoEnvConfig
@@ -26,14 +27,17 @@ from lerobot.utils.constants import ACTION
 from lerobot.utils.utils import inside_slurm
 from tqdm import tqdm
 
-from piper_arm.train_value import load_value_preprocessor
+from piper_arm.train_value import (  # noqa: F401
+    TrainValueConfig,
+    load_value_preprocessor,
+)
 from piper_arm.value_model import ValueConfig, ValueModel
 
 
 @dataclass
 class RolloutValueVizConfig:
     policy_path: str = "reece-omahoney/smolvla-libero-16-chunk"
-    value_checkpoint: str = "outputs/value/checkpoint_final.pt"
+    value_checkpoint: str = "outputs/value/2026-03-10/11-57-00/checkpoint_40000.pt"
     suite_name: str = "libero_10"
     task_ids: list[int] | None = None
     n_episodes: int = 1
@@ -136,7 +140,7 @@ def log_episode_to_rerun(result: dict, episode_idx: int) -> None:
     frames = result["frames"]
     status = "success" if result["success"] else "failure"
     task = result["task"]
-    print(f"Episode {episode_idx} ({status}): " f"{len(frames)} steps, task={task}")
+    print(f"Episode {episode_idx} ({status}): {len(frames)} steps, task={task}")
 
     for frame in frames:
         rr.set_time("step", sequence=frame["step"])
@@ -206,9 +210,27 @@ def main(cfg: RolloutValueVizConfig):
 
     for idx, result in enumerate(all_results):
         status = "ok" if result["success"] else "fail"
-        rec = rr.new_recording(application_id=f"episode_{idx}_{status}")
+
+        # Build blueprint from the camera keys in the first frame
+        cam_keys = sorted(
+            k for k in result["frames"][0] if k.startswith("observation.images.")
+        )
+        cam_views = [
+            rrb.Spatial2DView(
+                origin=k.replace("observation.images.", "cameras/"),
+            )
+            for k in cam_keys
+        ]
+        blueprint = rrb.Blueprint(
+            rrb.Vertical(
+                rrb.Horizontal(*cam_views), rrb.TimeSeriesView(origin="metrics/")
+            ),
+        )
+
+        rec = rr.RecordingStream(application_id=f"episode_{idx}_{status}")
         rec.connect_grpc(addr)
         with rec:
+            rr.send_blueprint(blueprint)
             log_episode_to_rerun(result, idx)
 
     if cfg.save:
