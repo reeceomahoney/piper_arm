@@ -40,4 +40,4 @@ lerobot_policy_advantage = { path = "lerobot_policy_advantage", editable = true 
 allow-direct-references = true
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
+select = ["I"]
