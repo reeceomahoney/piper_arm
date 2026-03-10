@@ -279,9 +279,9 @@ class ValueModel(nn.Module):
         # 4. Forward through VLM + expert
         (_, suffix_out), _ = self.vlm_with_expert.forward(
             attention_mask=att_2d_masks,
-            position_ids=position_ids,
+            position_ids=position_ids,  # type: ignore[invalid-argument-type]
             past_key_values=None,
-            inputs_embeds=[prefix_embs, suffix_embs],
+            inputs_embeds=[prefix_embs, suffix_embs],  # type: ignore[invalid-argument-type]
             use_cache=False,
             fill_kv_cache=False,
         )
@@ -294,7 +294,7 @@ class ValueModel(nn.Module):
     def predict_value(self, logits: Tensor) -> Tensor:
         """Expected value from logits via softmax + dot with bin centers."""
         probs = F.softmax(logits, dim=-1)
-        return (probs * self.bin_centers).sum(dim=-1)
+        return (probs * self.bin_centers).sum(dim=-1)  # type: ignore[unsupported-operator]
 
     @staticmethod
     def returns_to_bins(returns: Tensor, n_bins: int = 201) -> Tensor:

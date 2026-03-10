@@ -33,7 +33,7 @@ make gui-stop           # Stop Flask server
 # Code quality
 uv run ruff check piper_arm/          # Lint
 uv run ruff format piper_arm/         # Format
-uv run pyright                        # Type check (dev dependency)
+uv run ty                             # Type check (dev dependency)
 ```
 
 Pre-commit hooks run `ruff --fix` and `ruff-format` automatically. Ruff rules: E, F, I (errors, pyflakes, isort).

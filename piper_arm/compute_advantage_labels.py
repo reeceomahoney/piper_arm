@@ -69,7 +69,7 @@ def compute_all_values(
         (N,) float array of predicted values, one per frame.
     """
     loader = DataLoader(
-        dataset,  # type: ignore[arg-type]
+        dataset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
@@ -176,7 +176,7 @@ def binarize_advantages(
     return labels
 
 
-@draccus.wrap()  # type: ignore[misc]
+@draccus.wrap()
 def main(cfg: ComputeAdvantageLabelsConfig):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -216,7 +216,7 @@ def main(cfg: ComputeAdvantageLabelsConfig):
     print("Collecting task strings...")
     tasks: list[str] = []
     task_loader = DataLoader(
-        dataset,  # type: ignore[arg-type]
+        dataset,
         batch_size=cfg.batch_size,
         shuffle=False,
         num_workers=cfg.num_workers,
@@ -294,4 +294,4 @@ def main(cfg: ComputeAdvantageLabelsConfig):
 
 
 if __name__ == "__main__":
-    main()  # type: ignore[call-arg]
+    main()

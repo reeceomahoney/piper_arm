@@ -112,17 +112,15 @@ def load_value_preprocessor(
 
     Image preprocessing and state padding are handled inside ValueModel.forward.
     """
-    preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]] = (
-        PolicyProcessorPipeline.from_pretrained(
-            pretrained_model_name_or_path=pretrained_path,
-            config_filename=f"{POLICY_PREPROCESSOR_DEFAULT_NAME}.json",
-            to_transition=batch_to_transition_with_extras,
-        )
+    preprocessor = PolicyProcessorPipeline.from_pretrained(
+        pretrained_model_name_or_path=pretrained_path,
+        config_filename=f"{POLICY_PREPROCESSOR_DEFAULT_NAME}.json",
+        to_transition=batch_to_transition_with_extras,  # type: ignore[invalid-argument-type]
     )
-    return preprocessor
+    return preprocessor  # type: ignore[invalid-return-type]
 
 
-@draccus.wrap()  # type: ignore[misc]
+@draccus.wrap()
 def main(cfg: TrainValueConfig):
     random.seed(cfg.seed)
     np.random.seed(cfg.seed)
@@ -164,7 +162,7 @@ def main(cfg: TrainValueConfig):
     print(f"Dataset: {dataset.num_episodes} episodes, {dataset.num_frames} frames")
 
     loader = DataLoader(
-        dataset,  # type: ignore[arg-type]
+        dataset,
         batch_size=cfg.batch_size,
         shuffle=True,
         num_workers=cfg.num_workers,
@@ -234,7 +232,7 @@ def main(cfg: TrainValueConfig):
                 f"  mae={log['mae']:.4f}  lr={lr_str}"
             )
             if cfg.wandb_project:
-                wandb.log(log, step=step)  # type: ignore[possibly-undefined]
+                wandb.log(log, step=step)
 
         # ── Checkpointing ──
         if step % cfg.save_interval == 0:
@@ -265,4 +263,4 @@ def main(cfg: TrainValueConfig):
 
 
 if __name__ == "__main__":
-    main()  # type: ignore[call-arg]
+    main()

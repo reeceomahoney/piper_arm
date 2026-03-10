@@ -26,7 +26,7 @@ class AddLabelsConfig:
     output_repo_id: str | None = "reece-omahoney/libero"
 
 
-@draccus.wrap()  # type: ignore[misc]
+@draccus.wrap()
 def main(cfg: AddLabelsConfig):
     ds_kwargs: dict = {"repo_id": cfg.dataset_repo_id}
     if cfg.dataset_root:
@@ -96,4 +96,4 @@ def main(cfg: AddLabelsConfig):
 
 
 if __name__ == "__main__":
-    main()  # type: ignore[call-arg]
+    main()

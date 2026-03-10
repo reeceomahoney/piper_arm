@@ -66,7 +66,7 @@ def sync() -> None:
     )
 
 
-@draccus.wrap()  # type: ignore[misc]
+@draccus.wrap()
 def main(cfg: SlurmConfig):
     script = build_sbatch_script(cfg)
 
@@ -85,4 +85,4 @@ def main(cfg: SlurmConfig):
 
 
 if __name__ == "__main__":
-    main()  # type: ignore[call-arg]
+    main()

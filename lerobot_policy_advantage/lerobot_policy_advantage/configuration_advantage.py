@@ -131,6 +131,8 @@ class AdvantageConfig(PreTrainedConfig):
         )
 
     def validate_features(self) -> None:
+        if self.input_features is None:
+            return
         for i in range(self.empty_cameras):
             key = f"{OBS_IMAGES}.empty_camera_{i}"
             empty_camera = PolicyFeature(

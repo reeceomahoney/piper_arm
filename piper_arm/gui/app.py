@@ -230,7 +230,7 @@ def logs(job_id):
             text=True,
         )
         try:
-            for line in proc.stdout:
+            for line in proc.stdout or []:
                 yield f"data: {line.rstrip()}\n\n"
         finally:
             proc.terminate()

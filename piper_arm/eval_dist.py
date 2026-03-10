@@ -52,7 +52,7 @@ class EvalDistConfig:
     output_dir: str = "outputs/eval_dist"
 
 
-@draccus.wrap()  # type: ignore[misc]
+@draccus.wrap()
 def main(cfg: EvalDistConfig):
     os.environ["SVT_LOG"] = "1"
     # ── Load policy ──
@@ -126,7 +126,7 @@ def main(cfg: EvalDistConfig):
 
     try:
         for task_id, vec_env in envs[suite_name].items():
-            task_desc = vec_env.call("task_description")[0]
+            task_desc = vec_env.call("task_description")[0]  # type: ignore[attr-defined]
             n_tasks = len(envs[suite_name])
             print(f"\n=== Task {task_id + 1}/{n_tasks}: {task_desc} ===")
 
@@ -192,4 +192,4 @@ def main(cfg: EvalDistConfig):
 
 
 if __name__ == "__main__":
-    main()  # type: ignore[call-arg]
+    main()

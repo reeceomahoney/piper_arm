@@ -60,7 +60,7 @@ class AdvantagePolicy(PreTrainedPolicy):
     def __init__(self, config: AdvantageConfig, **kwargs):
         super().__init__(config)
         config.validate_features()
-        self.config = config
+        self.config: AdvantageConfig = config
 
         smolvla_config = config.to_smolvla_config()
         self.model = VLAFlowMatching(smolvla_config)
@@ -99,7 +99,7 @@ class AdvantagePolicy(PreTrainedPolicy):
     def reset(self):
         self.queues = {ACTION: deque(maxlen=self.config.n_action_steps)}
 
-    def get_optim_params(self) -> dict:
+    def get_optim_params(self):
         return self.parameters()
 
     def forward(
@@ -169,14 +169,14 @@ class AdvantagePolicy(PreTrainedPolicy):
         att_masks = torch.cat([prefix_att_masks, suffix_att_masks], dim=1)
 
         att_2d_masks = make_att_2d_masks(pad_masks, att_masks)
-        position_ids = torch.cumsum(pad_masks, dim=1) - 1
+        position_ids = (torch.cumsum(pad_masks, dim=1) - 1).long()
 
         # 6. Forward through VLM + expert
         (_, suffix_out), _ = model.vlm_with_expert.forward(
             attention_mask=att_2d_masks,
-            position_ids=position_ids,
+            position_ids=position_ids,  # type: ignore[invalid-argument-type]
             past_key_values=None,
-            inputs_embeds=[prefix_embs, suffix_embs],
+            inputs_embeds=[prefix_embs.float(), suffix_embs.float()],  # type: ignore[invalid-argument-type]
             use_cache=False,
             fill_kv_cache=False,
         )
@@ -244,7 +244,7 @@ class AdvantagePolicy(PreTrainedPolicy):
         )
 
         # Unpad actions
-        original_action_dim = self.config.action_feature.shape[0]
+        original_action_dim = self.config.action_feature.shape[0]  # type: ignore[unresolved-attribute]
         actions = actions[:, :, :original_action_dim]
         return actions
 
@@ -278,12 +278,12 @@ class AdvantagePolicy(PreTrainedPolicy):
 
         # KV cache forward
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
-        prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+        prefix_position_ids = (torch.cumsum(prefix_pad_masks, dim=1) - 1).long()
         _, past_key_values = model.vlm_with_expert.forward(
             attention_mask=prefix_att_2d_masks,
-            position_ids=prefix_position_ids,
+            position_ids=prefix_position_ids,  # type: ignore[invalid-argument-type]
             past_key_values=None,
-            inputs_embeds=[prefix_embs, None],
+            inputs_embeds=[prefix_embs, None],  # type: ignore[invalid-argument-type]
             use_cache=model.config.use_cache,
             fill_kv_cache=True,
         )

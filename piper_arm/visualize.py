@@ -101,7 +101,7 @@ class VisualizeConfig:
     port: int = 9876
 
 
-@draccus.wrap()  # type: ignore[misc]
+@draccus.wrap()
 def main(cfg: VisualizeConfig):
     trace_dir = Path(cfg.trace_dir).resolve()
 
@@ -141,7 +141,7 @@ def main(cfg: VisualizeConfig):
     for ep in episodes:
         meta = episode_meta.get(ep, {})
         task_desc = meta.get("task_description", "")
-        rec = rr.new_recording(application_id=f"episode_{ep}")
+        rec = rr.RecordingStream(application_id=f"episode_{ep}")
         rec.connect_grpc(addr)
         with rec:
             visualize_episode(trace_dir, ep, task_desc=task_desc)
@@ -150,4 +150,4 @@ def main(cfg: VisualizeConfig):
 
 
 if __name__ == "__main__":
-    main()  # type: ignore[call-arg]
+    main()

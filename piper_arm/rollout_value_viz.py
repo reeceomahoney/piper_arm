@@ -152,7 +152,7 @@ def log_episode_to_rerun(result: dict, episode_idx: int) -> None:
     rr.log("episode/success", rr.TextDocument(status))
 
 
-@draccus.wrap()  # type: ignore[misc]
+@draccus.wrap()
 def main(cfg: RolloutValueVizConfig):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -181,7 +181,7 @@ def main(cfg: RolloutValueVizConfig):
     # Rollout
     all_results = []
     for task_id, vec_env in envs[cfg.suite_name].items():
-        task_text = vec_env.call("task_description")[0]
+        task_text = vec_env.call("task_description")[0]  # type: ignore[attr-defined]
         print(f"\n=== Task {task_id}: {task_text} ===")
 
         for ep in range(cfg.n_episodes):
@@ -240,4 +240,4 @@ def main(cfg: RolloutValueVizConfig):
 
 
 if __name__ == "__main__":
-    main()  # type: ignore[call-arg]
+    main()
