@@ -72,7 +72,6 @@ def rollout_with_values(
     env_postprocessor,
     task_text: str,
     seed: int,
-    device: torch.device,
 ) -> dict:
     """Run a single episode, collecting observations and value estimates."""
     max_steps = vec_env.call("_max_episode_steps")[0]
@@ -198,7 +197,6 @@ def main(cfg: RolloutValueVizConfig):
                 env_postprocessor=env_postprocessor,
                 task_text=task_text,
                 seed=ep,
-                device=device,
             )
             all_results.append(result)
 
