@@ -7,7 +7,6 @@ Usage:
     python -m piper_arm.train_value --config_path configs/value.yaml
 """
 
-import itertools
 import random
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -18,6 +17,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.utils import cycle
 from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 from lerobot.policies.smolvla.modeling_smolvla import pad_vector, resize_with_pad
 from torch.utils.data import DataLoader
@@ -201,9 +201,10 @@ def main(cfg: TrainValueConfig):
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = optimizer_cfg.build(params)
     scheduler = scheduler_cfg.build(optimizer, num_training_steps=cfg.total_steps)
+
     # ── Training loop ──
     model.train()
-    data_iter = iter(itertools.cycle(loader))  # type: ignore[arg-type]
+    data_iter = cycle(loader)
 
     for step in range(1, cfg.total_steps + 1):
         batch = next(data_iter)
