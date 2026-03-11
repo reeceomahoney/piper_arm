@@ -1,0 +1,7 @@
+command: make train-advantage
+time: 6
+gpu: h100
+ngpu: 1
+cpus: 16
+mem: 8G
+dry_run: false

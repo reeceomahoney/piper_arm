@@ -13,7 +13,7 @@ from fabric import Connection
 
 REMOTE_HOST = "htc"
 REMOTE_PATH = "/data/engs-robotics-ml/kebl6123/piper_arm"
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path.cwd()
 
 PID_FILE = Path("/tmp/slurm-gui.pid")
 LOG_FILE = Path("/tmp/slurm-gui.log")
@@ -22,8 +22,8 @@ LOG_FILE = Path("/tmp/slurm-gui.log")
 @dataclass
 class SlurmConfig:
     command: str = "make train-advantage"
-    time: int = 3
-    gpu: str = "l40s"
+    time: int = 6
+    gpu: str = "h100"
     ngpu: int = 1
     cpus: int = 16
     mem: str = "8G"
@@ -69,8 +69,11 @@ def sync() -> None:
 # --- Subcommands ---
 
 
-@draccus.wrap()
-def run(cfg: SlurmConfig) -> None:
+def run() -> None:
+    config_path = PROJECT_ROOT / "configs" / "slurm.yaml"
+    if not config_path.exists():
+        config_path = None
+    cfg = draccus.parse(SlurmConfig, config_path=config_path)
     script = build_sbatch_script(cfg)
     if cfg.dry_run:
         print(script)
