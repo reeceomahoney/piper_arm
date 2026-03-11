@@ -6,13 +6,13 @@ from pathlib import Path
 
 from flask import Flask, Response, render_template, request
 
-from piper_arm.slurm import PROJECT_ROOT, REMOTE_HOST, REMOTE_PATH
+from slurm_tools.slurm import PROJECT_ROOT, REMOTE_HOST, REMOTE_PATH
 
-_dir = Path(__file__).parent
+dir = Path(__file__).parent
 app = Flask(
     __name__,
-    template_folder=str(_dir),
-    static_folder=str(_dir),
+    template_folder=str(dir),
+    static_folder=str(dir),
     static_url_path="/static",
 )
 
@@ -42,24 +42,24 @@ def index():
     return render_template("index.html")
 
 
-_GRES_RE = re.compile(r"gpu:(?:[^:(]+:)?(\d+)", re.IGNORECASE)
-_GRES_TYPE_RE = re.compile(r"gpu:([^:(]+):(\d+)", re.IGNORECASE)
-_DOWN = {"down", "down*", "drain", "drain*", "drng", "maint"}
-_NODELIST_RE = re.compile(r"^(.+)\[(.+)]$")
+GRES_RE = re.compile(r"gpu:(?:[^:(]+:)?(\d+)", re.IGNORECASE)
+GRES_TYPE_RE = re.compile(r"gpu:([^:(]+):(\d+)", re.IGNORECASE)
+DOWN = {"down", "down*", "drain", "drain*", "drng", "maint"}
+NODELIST_RE = re.compile(r"^(.+)\[(.+)]$")
 
 
-def _gpu_count(gres: str) -> int:
-    m = _GRES_RE.search(gres)
+def gpu_count(gres: str) -> int:
+    m = GRES_RE.search(gres)
     return int(m.group(1)) if m else 0
 
 
-def _gpu_type_and_count(gres: str) -> tuple[str, int] | None:
-    m = _GRES_TYPE_RE.search(gres)
+def gpu_type_and_count(gres: str) -> tuple[str, int] | None:
+    m = GRES_TYPE_RE.search(gres)
     return (m.group(1).upper(), int(m.group(2))) if m else None
 
 
-def _expand_nodelist(s: str) -> list[str]:
-    m = _NODELIST_RE.match(s)
+def expand_nodelist(s: str) -> list[str]:
+    m = NODELIST_RE.match(s)
     if not m:
         return [s]
     prefix, ranges = m.group(1), m.group(2)
@@ -86,8 +86,8 @@ def nodes():
         parts = line.split("|")
         if len(parts) != 2 or not parts[0].strip() or parts[1] in ("", "N/A"):
             continue
-        for node in _expand_nodelist(parts[0]):
-            node_alloc[node] = node_alloc.get(node, 0) + _gpu_count(parts[1])
+        for node in expand_nodelist(parts[0]):
+            node_alloc[node] = node_alloc.get(node, 0) + gpu_count(parts[1])
 
     # Aggregate by GPU type
     seen: set[str] = set()
@@ -98,7 +98,7 @@ def nodes():
         if len(parts) != 3 or parts[0] in seen:
             continue
         seen.add(parts[0])
-        parsed = _gpu_type_and_count(parts[2])
+        parsed = gpu_type_and_count(parts[2])
         if not parsed:
             continue
         gpu_type, total = parsed
@@ -107,7 +107,7 @@ def nodes():
         allocated = node_alloc.get(parts[0], 0)
         if not allocated and state in ("alloc", "resv"):
             allocated = total
-        node_free = max(0, total - allocated) if state not in _DOWN else 0
+        node_free = max(0, total - allocated) if state not in DOWN else 0
 
         totals[gpu_type] = totals.get(gpu_type, 0) + total
         free[gpu_type] = free.get(gpu_type, 0) + node_free
@@ -138,7 +138,7 @@ def jobs():
     if gpu_idx is not None:
         for row in rows:
             if gpu_idx < len(row):
-                m = _GRES_TYPE_RE.search(row[gpu_idx])
+                m = GRES_TYPE_RE.search(row[gpu_idx])
                 row[gpu_idx] = (
                     f"{m.group(1).upper()}:{m.group(2)}" if m else row[gpu_idx]
                 )

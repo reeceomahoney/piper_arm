@@ -1,4 +1,4 @@
-.PHONY: train finetune eval train-advantage record play gui gui-start gui-stop container
+.PHONY: train finetune eval train-advantage record play container
 
 ############
 # Training #

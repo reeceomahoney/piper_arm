@@ -13,7 +13,7 @@ from fabric import Connection
 
 REMOTE_HOST = "htc"
 REMOTE_PATH = "/data/engs-robotics-ml/kebl6123/piper_arm"
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 PID_FILE = Path("/tmp/slurm-gui.pid")
 LOG_FILE = Path("/tmp/slurm-gui.log")
@@ -114,7 +114,7 @@ def gui_start() -> None:
     os.dup2(log.fileno(), sys.stdout.fileno())
     os.dup2(log.fileno(), sys.stderr.fileno())
 
-    from piper_arm.gui.app import app
+    from slurm_tools.gui.app import app
 
     app.run(host="127.0.0.1", port=5000)
 

@@ -1828,7 +1828,6 @@ name = "piper-arm"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "fabric" },
     { name = "lerobot", extra = ["libero", "pi", "smolvla"] },
     { name = "lerobot-policy-advantage" },
     { name = "matplotlib" },
@@ -1838,11 +1837,7 @@ dependencies = [
     { name = "pyrealsense2-macosx", marker = "sys_platform == 'darwin'" },
     { name = "rerun-sdk" },
     { name = "scikit-learn" },
-]
-
-[package.optional-dependencies]
-gui = [
-    { name = "flask" },
+    { name = "slurm-tools" },
 ]
 
 [package.dev-dependencies]
@@ -1858,8 +1853,6 @@ hardware = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fabric", specifier = ">=3.2.2" },
-    { name = "flask", marker = "extra == 'gui'", specifier = ">=3.0" },
     { name = "lerobot", extras = ["smolvla", "libero", "pi"], git = "https://github.com/huggingface/lerobot.git" },
     { name = "lerobot-policy-advantage", editable = "lerobot_policy_advantage" },
     { name = "matplotlib", specifier = ">=3.7.0" },
@@ -1869,8 +1862,8 @@ requires-dist = [
     { name = "pyrealsense2-macosx", marker = "sys_platform == 'darwin'", specifier = ">=2.54.2" },
     { name = "rerun-sdk", specifier = ">=0.22" },
     { name = "scikit-learn", specifier = ">=1.3.0" },
+    { name = "slurm-tools", editable = "slurm_tools" },
 ]
-provides-extras = ["gui"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -2591,6 +2584,23 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
+name = "slurm-tools"
+version = "0.1.0"
+source = { editable = "slurm_tools" }
+dependencies = [
+    { name = "draccus" },
+    { name = "fabric" },
+    { name = "flask" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "draccus" },
+    { name = "fabric", specifier = ">=3.2.2" },
+    { name = "flask", specifier = ">=3.0" },
 ]
 
 [[package]]

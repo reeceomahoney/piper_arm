@@ -24,11 +24,11 @@ make play               # Play trained policy on physical arm
 
 # Cluster
 make container          # Build Singularity container and upload to cluster
-uv run slurm            # Submit SLURM job to HTC cluster (see slurm.py)
+uv run slurm run        # Submit SLURM job to HTC cluster (see slurm-tools package)
 
-# GUI (Flask-based SLURM monitor)
-make gui-start          # Start background Flask server
-make gui-stop           # Stop Flask server
+# GUI (Flask-based SLURM monitor, via slurm-tools package)
+uv run slurm gui        # Start background Flask server
+uv run slurm gui stop   # Stop Flask server
 
 # Code quality
 uv run pre-commit run --all-files     # Run all pre-commit hooks (ruff --fix, ruff-format)
@@ -58,10 +58,15 @@ The system implements a RECAP-style RL pipeline:
 - **mahalanobis.py** — Mahalanobis distance computation and Gaussian fitting (Ledoit-Wolf covariance).
 - **rollout.py** — Single episode rollout with Mahalanobis trace capture and moving-average smoothing.
 - **visualize.py** — Rerun-based visualization of rollout traces synced with MP4 videos.
-- **slurm.py** — SLURM job submission via SSH (fabric). Builds sbatch scripts, rsyncs project to cluster, runs in Singularity containers.
 - **push_to_hub.py** — Upload trained checkpoints to HuggingFace Hub.
-- **gui/app.py** — Flask web UI for monitoring SLURM jobs, GPU availability, streaming logs (SSE).
 - **zero.py** — Piper arm initialization/zeroing utility.
+
+### SLURM Tools (`slurm_tools/`)
+
+Separate local package for cluster job management:
+
+- **slurm.py** — SLURM job submission via SSH (fabric). Builds sbatch scripts, rsyncs project to cluster, runs in Singularity containers. Also manages the GUI daemon (start/stop).
+- **gui/app.py** — Flask web UI for monitoring SLURM jobs, GPU availability, streaming logs (SSE).
 
 ### Hardware Plugins
 
