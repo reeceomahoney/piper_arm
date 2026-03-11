@@ -36,7 +36,7 @@ class ComputeAdvantageLabelsConfig:
     c_fail: float = 1000.0
     reward_type: str = "steps_remaining"  # "steps_remaining" or "maha_distance"
     n_step: int = 10
-    advantage_percentile: float = 0.3
+    advantage_percentile: float = 0.7
     batch_size: int = 64
     num_workers: int = 4
     push_to_hub: bool = True
