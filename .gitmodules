@@ -1,0 +1,3 @@
+[submodule "slurm_tools"]
+	path = slurm_tools
+	url = git@github.com:reeceomahoney/slurm-tools.git
