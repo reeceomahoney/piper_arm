@@ -1,3 +1,5 @@
+host: htc
+remote_path: /data/engs-robotics-ml/kebl6123/piper_arm
 command: >-
   singularity run --nv
   --env "WANDB_API_KEY=${WANDB_API_KEY}"

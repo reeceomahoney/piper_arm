@@ -6,7 +6,9 @@ from pathlib import Path
 
 from flask import Flask, Response, render_template, request
 
-from slurm_tools.slurm import PROJECT_ROOT, REMOTE_HOST, REMOTE_PATH
+from slurm_tools.slurm import PROJECT_ROOT, load_config
+
+config = load_config()
 
 dir = Path(__file__).parent
 app = Flask(
@@ -19,7 +21,7 @@ app = Flask(
 
 def ssh(cmd: str, *, timeout: int = 10) -> str:
     result = subprocess.run(
-        ["ssh", REMOTE_HOST, cmd],
+        ["ssh", config.host, cmd],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -187,7 +189,7 @@ def fetch_results():
         [
             "rsync",
             "-avz",
-            f"{REMOTE_HOST}:{REMOTE_PATH}/outputs/eval_dist/",
+            f"{config.host}:{config.remote_path}/outputs/eval_dist/",
             f"{PROJECT_ROOT}/outputs/eval_dist/",
         ],
         capture_output=True,
@@ -199,7 +201,7 @@ def fetch_results():
 @app.route("/clean-logs", methods=["DELETE"])
 def clean_logs():
     ssh(
-        f"cd {REMOTE_PATH}/slurm"
+        f"cd {config.remote_path}/slurm"
         " && running=$(squeue -u $USER -h -t R -o 'slurm-%i.out'); "
         'if [ -n "$running" ]; then '
         'ls slurm-*.out 2>/dev/null | grep -vF "$running" | xargs -r rm -f; '
@@ -217,14 +219,14 @@ def logs(job_id):
 
     follow = request.args.get("follow", "1") == "1"
     cmd = (
-        f"tail -n +1 -f {REMOTE_PATH}/slurm/slurm-{job_id}.out"
+        f"tail -n +1 -f {config.remote_path}/slurm/slurm-{job_id}.out"
         if follow
-        else f"cat {REMOTE_PATH}/slurm/slurm-{job_id}.out"
+        else f"cat {config.remote_path}/slurm/slurm-{job_id}.out"
     )
 
     def stream():
         proc = subprocess.Popen(
-            ["ssh", REMOTE_HOST, cmd],
+            ["ssh", config.host, cmd],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

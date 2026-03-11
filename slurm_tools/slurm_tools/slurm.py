@@ -11,8 +11,6 @@ from pathlib import Path
 import draccus
 from fabric import Connection
 
-REMOTE_HOST = "htc"
-REMOTE_PATH = "/data/engs-robotics-ml/kebl6123/piper_arm"
 PROJECT_ROOT = Path.cwd()
 
 PID_FILE = Path("/tmp/slurm-gui.pid")
@@ -21,6 +19,8 @@ LOG_FILE = Path("/tmp/slurm-gui.log")
 
 @dataclass
 class SlurmConfig:
+    host: str = ""
+    remote_path: str = ""
     command: str = ""
     time: int = 6
     gpu: str = "h100"
@@ -28,6 +28,13 @@ class SlurmConfig:
     cpus: int = 16
     mem: str = "8G"
     dry_run: bool = False
+
+
+def load_config() -> SlurmConfig:
+    config_path = PROJECT_ROOT / "configs" / "slurm.yaml"
+    if not config_path.exists():
+        return SlurmConfig()
+    return draccus.decode(SlurmConfig, config_path=config_path)
 
 
 def build_sbatch_script(cfg: SlurmConfig) -> str:
@@ -47,14 +54,14 @@ def build_sbatch_script(cfg: SlurmConfig) -> str:
     return f"#!/bin/bash\n{header}\n\nset -euo pipefail\n{cfg.command}\n"
 
 
-def sync() -> None:
+def sync(cfg: SlurmConfig) -> None:
     subprocess.run(
         [
             "rsync",
             "-avz",
             "--filter=:- .gitignore",
             f"{PROJECT_ROOT}/",
-            f"{REMOTE_HOST}:{REMOTE_PATH}",
+            f"{cfg.host}:{cfg.remote_path}",
         ],
         check=True,
     )
@@ -73,13 +80,17 @@ def run() -> None:
         print(script)
         return
 
+    if not cfg.host or not cfg.remote_path:
+        print("Error: host and remote_path must be set (in yaml or via CLI)")
+        sys.exit(1)
+
     print("Syncing...")
-    sync()
+    sync(cfg)
 
     print("Submitting...")
-    conn = Connection(REMOTE_HOST)
-    conn.put(StringIO(script), f"{REMOTE_PATH}/submit.sh")
-    conn.run(f"cd {REMOTE_PATH} && mkdir -p slurm && sbatch submit.sh")
+    conn = Connection(cfg.host)
+    conn.put(StringIO(script), f"{cfg.remote_path}/submit.sh")
+    conn.run(f"cd {cfg.remote_path} && mkdir -p slurm && sbatch submit.sh")
 
 
 def read_pid() -> int | None:
