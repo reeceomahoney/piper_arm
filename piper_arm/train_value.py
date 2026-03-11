@@ -35,6 +35,7 @@ class TrainValueConfig:
     dataset_root: str | None = None
     pretrained_path: str = "reece-omahoney/smolvla-libero-16-chunk"
     c_fail: float = 1000.0
+    reward_type: str = "steps_remaining"  # "steps_remaining" or "maha_distance"
 
     value: ValueConfig = field(default_factory=ValueConfig)
 
@@ -87,7 +88,61 @@ def compute_returns(
     return returns.clamp(-1.0, 0.0)
 
 
-VALUE_EXTRA_KEYS = ("steps_remaining", "success")
+def precompute_maha_returns(
+    dataset: LeRobotDataset,
+    max_episode_length: int,
+) -> tuple[np.ndarray, float]:
+    """Pre-compute per-frame returns using negative Mahalanobis distance as reward.
+
+    For each episode, G_t = sum_{k=t}^{T-1} -maha[k]. Returns are normalized
+    to [-1, 0] by dividing by the max absolute return across all frames.
+
+    Args:
+        dataset: LeRobot dataset with a ``maha_distance`` column.
+        max_episode_length: max steps in any episode (unused but kept for API
+            consistency; normalization is data-driven).
+
+    Returns:
+        (returns, norm_constant) where *returns* is a ``(num_frames,)`` float64
+        array of normalized returns in ``[-1, 0]`` and *norm_constant* is the
+        divisor used for normalization.
+    """
+    maha = np.array(
+        [s.item() for s in dataset.hf_dataset["maha_distance"]], dtype=np.float64
+    )
+    episode_index = np.array(
+        [s.item() for s in dataset.hf_dataset["episode_index"]], dtype=np.float64
+    )
+
+    num_frames = len(maha)
+    returns = np.zeros(num_frames, dtype=np.float64)
+
+    # Reverse cumulative sum of -maha within each episode
+    i = num_frames - 1
+    while i >= 0:
+        ep = episode_index[i]
+        cumsum = 0.0
+        j = i
+        # Find all frames in this episode (they are contiguous)
+        while j >= 0 and episode_index[j] == ep:
+            j -= 1
+        ep_start = j + 1
+        # Forward pass computing reverse cumsum
+        cumsum = 0.0
+        for k in range(i, ep_start - 1, -1):
+            cumsum += -maha[k]
+            returns[k] = cumsum
+        i = ep_start - 1
+
+    # Normalize to [-1, 0]
+    norm_constant = np.abs(returns).max()
+    if norm_constant > 0:
+        returns = returns / norm_constant
+
+    return returns, float(norm_constant)
+
+
+VALUE_EXTRA_KEYS = ("steps_remaining", "success", "maha_distance", "index")
 
 
 def batch_to_transition_with_extras(batch: dict[str, Any]) -> EnvTransition:
@@ -190,6 +245,19 @@ def main(cfg: TrainValueConfig):
         model.load_state_dict(ckpt["model_state_dict"])
         print(f"Loaded pretrained value model from {cfg.value_pretrained_path}")
 
+    # ── Pre-compute maha returns if needed ──
+    maha_norm = None
+    maha_returns_tensor = None
+    if cfg.reward_type == "maha_distance":
+        print("Pre-computing Mahalanobis distance returns...")
+        maha_returns_arr, maha_norm = precompute_maha_returns(
+            dataset, max_episode_length
+        )
+        maha_returns_tensor = torch.tensor(
+            maha_returns_arr, dtype=torch.float32, device=device
+        )
+        print(f"Maha norm constant: {maha_norm:.4f}")
+
     # ── Training loop ──
     model.train()
     data_iter = cycle(loader)
@@ -198,9 +266,17 @@ def main(cfg: TrainValueConfig):
         batch = next(data_iter)
         batch = preprocessor(batch)
 
-        returns = compute_returns(
-            batch["steps_remaining"], batch["success"], max_episode_length, cfg.c_fail
-        )
+        if cfg.reward_type == "maha_distance":
+            assert maha_returns_tensor is not None
+            indices = batch["index"].long().to(device)
+            returns = maha_returns_tensor[indices]
+        else:
+            returns = compute_returns(
+                batch["steps_remaining"],
+                batch["success"],
+                max_episode_length,
+                cfg.c_fail,
+            )
 
         logits = model(batch)
         targets = ValueModel.returns_to_bins(returns, cfg.value.n_bins)
@@ -235,28 +311,28 @@ def main(cfg: TrainValueConfig):
         # ── Checkpointing ──
         if step % cfg.save_interval == 0:
             ckpt_path = output_dir / f"checkpoint_{step}.pt"
-            torch.save(
-                {
-                    "step": step,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "config": cfg,
-                },
-                ckpt_path,
-            )
+            ckpt_data: dict[str, Any] = {
+                "step": step,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "config": cfg,
+            }
+            if maha_norm is not None:
+                ckpt_data["maha_norm"] = maha_norm
+            torch.save(ckpt_data, ckpt_path)
             print(f"Saved checkpoint: {ckpt_path}")
 
     # Save final checkpoint
     final_path = output_dir / "checkpoint_final.pt"
-    torch.save(
-        {
-            "step": cfg.total_steps,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "config": cfg,
-        },
-        final_path,
-    )
+    final_ckpt_data: dict[str, Any] = {
+        "step": cfg.total_steps,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "config": cfg,
+    }
+    if maha_norm is not None:
+        final_ckpt_data["maha_norm"] = maha_norm
+    torch.save(final_ckpt_data, final_path)
     print(f"Training complete. Final checkpoint: {final_path}")
 
 

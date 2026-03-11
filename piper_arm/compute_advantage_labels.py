@@ -34,6 +34,7 @@ class ComputeAdvantageLabelsConfig:
     dataset_repo_id: str = "reece-omahoney/libero-10-maha"
     dataset_root: str | None = None
     c_fail: float = 1000.0
+    reward_type: str = "steps_remaining"  # "steps_remaining" or "maha_distance"
     n_step: int = 10
     advantage_percentile: float = 0.3
     batch_size: int = 64
@@ -149,6 +150,58 @@ def compute_nstep_advantages(
     return advantages
 
 
+def compute_nstep_advantages_maha(
+    values: np.ndarray,
+    maha_distance: np.ndarray,
+    maha_norm: float,
+    episode_index: np.ndarray,
+    n_step: int,
+) -> np.ndarray:
+    """Compute n-step TD advantages using negative Mahalanobis distance rewards.
+
+    Per-step reward: r_t = -maha_distance[t] / maha_norm
+
+    N-step (when window stays in episode):
+        A(t) = sum_{k=0}^{N-1} r_{t+k} + V(t+N) - V(t)
+
+    MC fallback (near episode end):
+        A(t) = sum_{k=t}^{T-1} r_k - V(t)
+
+    No c_fail penalty — high maha distances naturally produce lower returns.
+
+    Args:
+        values: (N,) predicted values for each frame.
+        maha_distance: (N,) Mahalanobis distance per frame.
+        maha_norm: normalization constant (from value training checkpoint).
+        episode_index: (N,) episode index per frame.
+        n_step: number of lookahead steps N.
+
+    Returns:
+        (N,) float array of advantages.
+    """
+    num_frames = len(values)
+    advantages = np.zeros(num_frames, dtype=np.float64)
+    rewards = -maha_distance.astype(np.float64) / maha_norm
+
+    for i in range(num_frames):
+        ep = int(episode_index[i])
+        target = i + n_step
+        in_episode = target < num_frames and int(episode_index[target]) == ep
+
+        if in_episode:
+            n_step_reward_sum = rewards[i:target].sum()
+            advantages[i] = n_step_reward_sum + values[target] - values[i]
+        else:
+            # MC fallback: sum remaining rewards in this episode
+            j = i
+            while j < num_frames and int(episode_index[j]) == ep:
+                j += 1
+            mc_return = rewards[i:j].sum()
+            advantages[i] = mc_return - values[i]
+
+    return advantages
+
+
 def compute_thresholds_from_advantages(
     advantages: np.ndarray,
     tasks: list[str],
@@ -237,15 +290,31 @@ def main(cfg: ComputeAdvantageLabelsConfig):
 
     # Compute n-step advantages
     print(f"Computing {cfg.n_step}-step advantages...")
-    advantages = compute_nstep_advantages(
-        values,
-        steps_remaining,
-        success,
-        episode_index,
-        max_episode_length,
-        cfg.n_step,
-        cfg.c_fail,
-    )
+    if cfg.reward_type == "maha_distance":
+        maha_distance = np.array(
+            [s.item() for s in dataset.hf_dataset["maha_distance"]],
+            dtype=np.float64,
+        )
+        ckpt = torch.load(cfg.value_checkpoint, map_location="cpu", weights_only=False)
+        maha_norm = ckpt["maha_norm"]
+        print(f"Loaded maha_norm={maha_norm:.4f} from checkpoint")
+        advantages = compute_nstep_advantages_maha(
+            values,
+            maha_distance,
+            maha_norm,
+            episode_index,
+            cfg.n_step,
+        )
+    else:
+        advantages = compute_nstep_advantages(
+            values,
+            steps_remaining,
+            success,
+            episode_index,
+            max_episode_length,
+            cfg.n_step,
+            cfg.c_fail,
+        )
 
     # Compute per-task thresholds and binarize
     print("Computing per-task advantage thresholds...")
