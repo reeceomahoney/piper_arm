@@ -4,6 +4,7 @@ Rolls out the policy in LIBERO, recording observations, actions, and
 per-episode success into a LeRobot dataset.
 """
 
+import multiprocessing
 import os
 
 os.environ.setdefault("MUJOCO_GL", "egl")
@@ -27,13 +28,15 @@ from tqdm import tqdm
 
 from piper_arm.rollout import build_frame, rollout
 
+multiprocessing.set_start_method("spawn", force=True)
+
 
 @dataclass
 class EvalDistConfig:
     policy_path: str = "reece-omahoney/smolvla-libero-16-chunk"
     base_dataset_repo_id: str = "lerobot/libero"
     n_episodes: int = 50
-    n_envs: int = 25
+    n_envs: int = 50
     dataset_repo_id: str | None = "reece-omahoney/libero-10"
     device: str = "cuda:1"
     max_tasks: int | None = None  # limit number of tasks (None = all)
@@ -71,7 +74,8 @@ def main(cfg: EvalDistConfig):
             repo_id=cfg.dataset_repo_id,
             fps=int(base_meta.fps),
             features=features,
-            image_writer_threads=4 * len(base_meta.camera_keys),
+            image_writer_threads=8 * len(base_meta.camera_keys),
+            vcodec="auto",
         )
 
     # ── Rollout ──
