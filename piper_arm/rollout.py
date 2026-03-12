@@ -74,12 +74,7 @@ def rollout(
         for _ in range(n_envs)
     ]
 
-    for _ in tqdm(
-        range(max_steps),
-        desc=desc,
-        leave=False,
-        disable=inside_slurm(),
-    ):
+    for _ in tqdm(range(max_steps), desc=desc, leave=False, disable=inside_slurm()):
         if not any(active):
             break
 
@@ -88,6 +83,10 @@ def rollout(
         observation = env_preprocessor(observation)
         raw_obs = deepcopy(observation)
         observation = preprocessor(observation)
+        observation = {
+            k: v.to(policy.config.device) if isinstance(v, torch.Tensor) else v
+            for k, v in observation.items()
+        }
 
         with torch.inference_mode():
             emb = embed_prefix_pooled(policy, observation)
