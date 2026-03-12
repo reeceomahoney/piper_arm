@@ -1,11 +1,5 @@
 """Roll out a base policy in LIBERO, compute value estimates at each step,
 and visualize with Rerun (cameras + value over time).
-
-Usage:
-    python -m piper_arm.rollout_value_viz \
-        --policy-path reece-omahoney/smolvla-libero-16-chunk \
-        --value-checkpoint outputs/value/checkpoint_final.pt \
-        --n-episodes 1
 """
 
 from copy import deepcopy

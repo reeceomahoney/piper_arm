@@ -2,11 +2,6 @@
 
 Rolls out the policy in LIBERO, recording observations, actions, and
 per-episode success into a LeRobot dataset.
-
-Usage:
-    python -m piper_arm.eval_dist \
-        --policy-path lerobot/smolvla_libero_finetuned \
-        --n-episodes 50
 """
 
 import os

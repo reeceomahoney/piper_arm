@@ -7,9 +7,6 @@ per-sample advantages using per-task percentile thresholds. Adds an
 N-step advantage: A(t) = sum_{k=0}^{N-1} r_{t+k} + V(t+N) - V(t)
 where r = -1/max_ep_len per step. Falls back to MC return when the n-step
 window extends past the episode boundary.
-
-Usage:
-    python -m piper_arm.compute_advantage_labels
 """
 
 import json

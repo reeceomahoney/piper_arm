@@ -38,6 +38,8 @@ Ruff rules: E, F, I (errors, pyflakes, isort).
 
 **Never start function or variable names with underscores.** Use plain names without leading underscores for all functions and variables.
 
+**Do not add `Usage:` sections to module-level docstrings.** Scripts use draccus configs which are self-documenting.
+
 No formal test suite exists — testing is done manually via the Makefile commands.
 
 slurm_tools has its own git repo, use this to push changes

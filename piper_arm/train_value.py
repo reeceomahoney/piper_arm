@@ -2,9 +2,6 @@
 
 Uses cross-entropy loss over discretized return bins (RECAP-style).
 Ground truth returns are computed analytically from steps_remaining + success.
-
-Usage:
-    python -m piper_arm.train_value --config_path configs/value.yaml
 """
 
 import random

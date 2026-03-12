@@ -3,10 +3,6 @@
 Iterates over the dataset's parquet files, computes steps_remaining
 per episode (counting down from episode length - 1 to 0), and sets
 success=True for every frame.
-
-Usage:
-    python -m piper_arm.add_labels
-    python -m piper_arm.add_labels --dataset_repo_id lerobot/libero
 """
 
 import json

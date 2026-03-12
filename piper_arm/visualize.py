@@ -2,16 +2,6 @@
 
 Loads saved MP4 videos and NPZ distance traces, then displays them in the
 Rerun viewer with synced timeline (step number).
-
-Usage:
-    # Visualize all episodes in a trace directory:
-    python -m piper_arm.visualize \
-        --trace-dir outputs/eval_dist/latest
-
-    # Visualize a specific episode:
-    python -m piper_arm.visualize \
-        --trace-dir outputs/eval_dist/latest \
-        --episode 0
 """
 
 import json
