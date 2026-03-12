@@ -33,7 +33,7 @@ class EvalDistConfig:
     policy_path: str = "reece-omahoney/smolvla-libero-16-chunk"
     base_dataset_repo_id: str = "lerobot/libero"
     n_episodes: int = 50
-    n_envs: int = 16
+    n_envs: int = 25
     dataset_repo_id: str | None = "reece-omahoney/libero-10"
     device: str = "cuda:1"
     max_tasks: int | None = None  # limit number of tasks (None = all)
