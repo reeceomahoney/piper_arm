@@ -4,29 +4,31 @@ Rolls out the policy in LIBERO, recording observations, actions, and
 per-episode success into a LeRobot dataset.
 """
 
-import multiprocessing
 import os
 
 os.environ.setdefault("MUJOCO_GL", "egl")
 
+import multiprocessing
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import draccus
 import numpy as np
+import torch
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.envs.configs import LiberoEnv as LiberoEnvConfig
 from lerobot.envs.factory import make_env, make_env_pre_post_processors
-from lerobot.utils.utils import get_safe_torch_device
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.pi05.modeling_pi05 import PI05Policy
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+from lerobot.utils.random_utils import set_seed
+from lerobot.utils.utils import get_safe_torch_device
 from libero.libero import benchmark
 from tqdm import tqdm
-import torch
 
 from piper_arm.rollout import build_frame, rollout
 
@@ -42,12 +44,19 @@ class EvalDistConfig:
     dataset_repo_id: str | None = "reece-omahoney/libero-10"
     device: str = "cuda"
     max_tasks: int | None = None  # limit number of tasks (None = all)
+    seed: int = 0
     use_amp: bool = True
 
 
 @draccus.wrap()
 def main(cfg: EvalDistConfig):
     os.environ["SVT_LOG"] = "1"
+
+    device = get_safe_torch_device(cfg.device, log=True)
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    set_seed(cfg.seed)
+
     # ── Load policy ──
     suite_name = "libero_10"
     env_cfg = LiberoEnvConfig(suite_name, fps=10)
@@ -55,8 +64,6 @@ def main(cfg: EvalDistConfig):
     policy_cfg.pretrained_path = Path(cfg.policy_path)
     policy_cfg.device = cfg.device
     policy_cfg.use_amp = cfg.use_amp
-    device = get_safe_torch_device(cfg.device, log=True)
-
 
     policy = make_policy(cfg=policy_cfg, env_cfg=env_cfg)
     assert isinstance(policy, (PI05Policy, SmolVLAPolicy))
@@ -103,7 +110,9 @@ def main(cfg: EvalDistConfig):
                 ep = 0
                 task_results: list[dict[str, Any]] = []
                 pbar = tqdm(
-                    total=cfg.n_episodes, desc=f"Task {task_id + 1}/{n_tasks}", unit="ep"
+                    total=cfg.n_episodes,
+                    desc=f"Task {task_id + 1}/{n_tasks}",
+                    unit="ep",
                 )
                 while ep < cfg.n_episodes:
                     batch_seeds = list(range(ep, ep + cfg.n_envs))
@@ -132,7 +141,9 @@ def main(cfg: EvalDistConfig):
                                     dataset.meta.features,
                                 )
                                 frame["task"] = task_desc
-                                frame["success"] = np.array([result["success"]], dtype=bool)
+                                frame["success"] = np.array(
+                                    [result["success"]], dtype=bool
+                                )
                                 dataset.add_frame(frame)
                             dataset.save_episode()
 

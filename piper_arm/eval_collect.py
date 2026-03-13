@@ -39,7 +39,7 @@ class EvalDistConfig:
     base_dataset_repo_id: str = "lerobot/libero"
     n_episodes: int = 50
     n_envs: int = 50
-    dataset_repo_id: str | None = "reece-omahoney/libero-10"
+    dataset_repo_id: str = "reece-omahoney/libero-10"
     device: str = "cuda"
     max_tasks: int | None = None  # limit number of tasks (None = all)
     seed: int = 0
@@ -116,17 +116,15 @@ def main(cfg: EvalDistConfig):
     base_meta = LeRobotDatasetMetadata(repo_id=cfg.base_dataset_repo_id)
 
     # ── Dataset setup ──
-    dataset = None
-    if cfg.dataset_repo_id:
-        features = base_meta.features.copy()
-        features["success"] = {"dtype": "bool", "shape": (1,), "names": None}
-        dataset = LeRobotDataset.create(
-            repo_id=cfg.dataset_repo_id,
-            fps=int(base_meta.fps),
-            features=features,
-            image_writer_threads=8 * len(base_meta.camera_keys),
-            vcodec="auto",
-        )
+    features = base_meta.features.copy()
+    features["success"] = {"dtype": "bool", "shape": (1,), "names": None}
+    dataset = LeRobotDataset.create(
+        repo_id=cfg.dataset_repo_id,
+        fps=int(base_meta.fps),
+        features=features,
+        image_writer_threads=8 * len(base_meta.camera_keys),
+        vcodec="auto",
+    )
 
     # ── Rollout ──
     suite = benchmark.get_benchmark_dict()[suite_name]()
@@ -154,28 +152,25 @@ def main(cfg: EvalDistConfig):
                     preprocessor=preprocessor,
                     postprocessor=postprocessor,
                     n_episodes=cfg.n_episodes,
-                    return_episode_data=dataset is not None,
+                    return_episode_data=True,
                     start_seed=cfg.seed,
                 )
-
                 task_successes = [ep["success"] for ep in info["per_episode"]]
                 all_successes.extend(task_successes)
                 n_success = sum(task_successes)
                 n = len(task_successes)
                 print(f"  Success rate: {n_success}/{n} ({100 * n_success / n:.1f}%)")
 
-                if dataset is not None:
-                    write_episodes_to_dataset(info, dataset, task_desc)
+                write_episodes_to_dataset(info, dataset, task_desc)
 
                 vec_env.close()
     finally:
-        if dataset is not None:
-            dataset.finalize()
-            print(
-                f"Dataset saved to {dataset.root}"
-                f" ({dataset.num_episodes} episodes, {dataset.num_frames} frames)"
-            )
-            dataset.push_to_hub()
+        dataset.finalize()
+        print(
+            f"Dataset saved to {dataset.root}"
+            f" ({dataset.num_episodes} episodes, {dataset.num_frames} frames)"
+        )
+        dataset.push_to_hub()
 
     elapsed = time.monotonic() - t_start
     total_successes = sum(all_successes)
