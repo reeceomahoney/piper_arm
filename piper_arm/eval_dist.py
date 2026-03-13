@@ -149,6 +149,7 @@ def main(cfg: EvalDistConfig):
                 f"Dataset saved to {dataset.root}"
                 f" ({dataset.num_episodes} episodes, {dataset.num_frames} frames)"
             )
+            dataset.push_to_hub()
 
     elapsed = time.monotonic() - t_start
     total_successes = sum(r["success"] for r in all_results)
