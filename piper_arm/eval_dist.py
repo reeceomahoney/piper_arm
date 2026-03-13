@@ -7,15 +7,16 @@ per-episode success into a LeRobot dataset.
 import multiprocessing
 import os
 
-os.environ.setdefault("MUJOCO_GL", "egl")
+os.environ["MUJOCO_GL"] = "egl"
 
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import draccus
 import numpy as np
+import torch
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.envs.configs import LiberoEnv as LiberoEnvConfig
@@ -23,10 +24,11 @@ from lerobot.envs.factory import make_env, make_env_pre_post_processors
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.pi05.modeling_pi05 import PI05Policy
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+from lerobot.scripts.lerobot_eval import eval_policy as lerobot_eval_policy
+from lerobot.utils.import_utils import register_third_party_plugins
+from lerobot.utils.random_utils import set_seed
+from lerobot.utils.utils import get_safe_torch_device, init_logging
 from libero.libero import benchmark
-from tqdm import tqdm
-
-from piper_arm.rollout import build_frame, rollout
 
 multiprocessing.set_start_method("spawn", force=True)
 
@@ -38,14 +40,57 @@ class EvalDistConfig:
     n_episodes: int = 50
     n_envs: int = 50
     dataset_repo_id: str | None = "reece-omahoney/libero-10"
-    device: str = "cuda:1"
+    device: str = "cuda"
     max_tasks: int | None = None  # limit number of tasks (None = all)
+    seed: int = 0
+    use_amp: bool = False
+
+
+def write_episodes_to_dataset(
+    info: dict,
+    dataset: LeRobotDataset,
+    task_desc: str,
+) -> None:
+    """Write episode data returned by lerobot's eval_policy into a LeRobot dataset."""
+    episodes = info["episodes"]
+    obs_keys = [k for k in episodes if k.startswith("observation.")]
+    features = dataset.meta.features
+
+    for ep_info in info["per_episode"]:
+        ep_ix = ep_info["episode_ix"]
+        mask = episodes["episode_index"] == ep_ix
+        # _compile_episode_data pads one extra copy frame per episode; drop it
+        indices = torch.where(mask)[0][:-1]
+
+        for idx in indices:
+            frame = {"action": episodes["action"][idx]}
+            for key in obs_keys:
+                if key not in features:
+                    continue
+                val = episodes[key][idx]
+                if key.startswith("observation.images."):
+                    frame[key] = (val.permute(1, 2, 0) * 255).to(torch.uint8)
+                else:
+                    frame[key] = val
+            frame["task"] = task_desc
+            frame["success"] = np.array([ep_info["success"]], dtype=bool)
+            dataset.add_frame(frame)
+        dataset.save_episode()
 
 
 @draccus.wrap()
 def main(cfg: EvalDistConfig):
+    init_logging()
+    register_third_party_plugins()
+
     os.environ["SVT_LOG"] = "1"
-    os.environ["MUJOCO_EGL_DEVICE_ID"] = "0"
+    # os.environ["MUJOCO_EGL_DEVICE_ID"] = "0"
+
+    device = get_safe_torch_device(cfg.device, log=True)
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    set_seed(cfg.seed)
+
     # ── Load policy ──
     suite_name = "libero_10"
     env_cfg = LiberoEnvConfig(suite_name, fps=10)
@@ -57,8 +102,13 @@ def main(cfg: EvalDistConfig):
     assert isinstance(policy, (PI05Policy, SmolVLAPolicy))
     policy.eval()
 
+    preprocessor_overrides = {
+        "device_processor": {"device": str(policy.config.device)},
+    }
     preprocessor, postprocessor = make_pre_post_processors(
-        policy_cfg=policy_cfg, pretrained_path=str(policy_cfg.pretrained_path)
+        policy_cfg=policy_cfg,
+        pretrained_path=str(policy_cfg.pretrained_path),
+        preprocessor_overrides=preprocessor_overrides,
     )
     env_preprocessor, env_postprocessor = make_env_pre_post_processors(
         env_cfg, policy_cfg
@@ -83,65 +133,41 @@ def main(cfg: EvalDistConfig):
     n_tasks = len(suite.tasks)
     if cfg.max_tasks is not None:
         n_tasks = min(n_tasks, cfg.max_tasks)
-    all_results: list[dict[str, Any]] = []
+    all_successes: list[bool] = []
     t_start = time.monotonic()
 
+    amp_ctx = torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext()
     try:
-        for task_id in range(n_tasks):
-            task_env_cfg = LiberoEnvConfig(suite_name, fps=10, task_ids=[task_id])
-            task_envs = make_env(task_env_cfg, n_envs=cfg.n_envs)
-            vec_env = task_envs[suite_name][task_id]
-            task_desc = vec_env.call("task_description")[0]  # type: ignore[attr-defined]
+        with torch.no_grad(), amp_ctx:
+            for task_id in range(n_tasks):
+                task_env_cfg = LiberoEnvConfig(suite_name, fps=10, task_ids=[task_id])
+                task_envs = make_env(task_env_cfg, n_envs=cfg.n_envs)
+                vec_env = task_envs[suite_name][task_id]
+                task_desc = vec_env.call("task_description")[0]  # type: ignore[attr-defined]
+                print(f"\nTask {task_id + 1}/{n_tasks}: {task_desc}")
 
-            ep = 0
-            task_results: list[dict[str, Any]] = []
-            pbar = tqdm(
-                total=cfg.n_episodes, desc=f"Task {task_id + 1}/{n_tasks}", unit="ep"
-            )
-            while ep < cfg.n_episodes:
-                batch_seeds = list(range(ep, ep + cfg.n_envs))
-                batch_results = rollout(
+                info = lerobot_eval_policy(
+                    env=vec_env,
                     policy=policy,
-                    vec_env=vec_env,
-                    preprocessor=preprocessor,
-                    postprocessor=postprocessor,
                     env_preprocessor=env_preprocessor,
                     env_postprocessor=env_postprocessor,
-                    seeds=batch_seeds,
-                    desc=f"  Ep {ep}-{ep + cfg.n_envs - 1}",
+                    preprocessor=preprocessor,
+                    postprocessor=postprocessor,
+                    n_episodes=cfg.n_episodes,
+                    return_episode_data=dataset is not None,
+                    start_seed=cfg.seed,
                 )
 
-                for i, result in enumerate(batch_results):
-                    ep_num = ep + i
-                    if ep_num >= cfg.n_episodes:
-                        break
+                task_successes = [ep["success"] for ep in info["per_episode"]]
+                all_successes.extend(task_successes)
+                n_success = sum(task_successes)
+                n = len(task_successes)
+                print(f"  Success rate: {n_success}/{n} ({100 * n_success / n:.1f}%)")
 
-                    if dataset is not None:
-                        n_frames = len(result["observations"])
-                        for frame_idx in range(n_frames):
-                            frame = build_frame(
-                                result["observations"][frame_idx],
-                                result["actions"][frame_idx],
-                                dataset.meta.features,
-                            )
-                            frame["task"] = task_desc
-                            frame["success"] = np.array([result["success"]], dtype=bool)
-                            dataset.add_frame(frame)
-                        dataset.save_episode()
+                if dataset is not None:
+                    write_episodes_to_dataset(info, dataset, task_desc)
 
-                    pbar.update(1)
-                    task_results.append(result)
-                    all_results.append(result)
-
-                ep += cfg.n_envs
-            pbar.close()
-
-            task_successes = sum(r["success"] for r in task_results)
-            n = len(task_results)
-            pct = 100 * task_successes / n
-            print(f"  Success rate: {task_successes}/{n} ({pct:.1f}%)")
-
-            vec_env.close()
+                vec_env.close()
     finally:
         if dataset is not None:
             dataset.finalize()
@@ -152,8 +178,8 @@ def main(cfg: EvalDistConfig):
             dataset.push_to_hub()
 
     elapsed = time.monotonic() - t_start
-    total_successes = sum(r["success"] for r in all_results)
-    n = len(all_results)
+    total_successes = sum(all_successes)
+    n = len(all_successes)
     pct = 100 * total_successes / n
     print(f"\nOverall success rate: {total_successes}/{n} ({pct:.1f}%)")
     print(f"Total time: {elapsed:.1f}s ({elapsed / 60:.1f}min)")
