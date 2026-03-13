@@ -1,11 +1,12 @@
-job_name: smolvla-libero-16-chunk
+job_name: smolvla-libero-bsz-256
 num_workers: 8
-batch_size: 64
+batch_size: 256
 steps: 100_000
 eval_freq: 10_000
 
 dataset:
-  repo_id: reece-omahoney/libero
+  repo_id: lerobot/libero
+  use_imagenet_stats: false
 
 env:
   type: libero
@@ -15,7 +16,7 @@ env:
 # these are overriden when finetuning
 policy:
   type: smolvla
-  repo_id: reece-omahoney/smolvla-libero-16-chunk
+  repo_id: reece-omahoney/smolvla-libero-bsz-256
   device: cuda
   chunk_size: 16
   n_action_steps: 8
@@ -23,10 +24,11 @@ policy:
   resize_imgs_with_padding: [256, 256]
   max_state_dim: 8
   max_action_dim: 7
+  scheduler_decay_steps: 100_000
 
 eval:
-  n_episodes: 1
-  batch_size: 1
+  n_episodes: 50
+  batch_size: 10
 
 wandb:
   enable: true
