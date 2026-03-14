@@ -95,7 +95,6 @@ def main(cfg: EvalDistConfig):
     policy_cfg = PreTrainedConfig.from_pretrained(cfg.policy_path)
     policy_cfg.pretrained_path = Path(cfg.policy_path)
     policy_cfg.device = str(device)
-    policy_cfg.use_amp = cfg.use_amp
 
     policy = make_policy(cfg=policy_cfg, env_cfg=env_cfg)
     assert isinstance(policy, (PI05Policy, SmolVLAPolicy))
@@ -129,7 +128,11 @@ def main(cfg: EvalDistConfig):
     all_successes: list[bool] = []
     t_start = time.monotonic()
 
-    amp_ctx = torch.autocast(device_type=device.type) if cfg.use_amp else nullcontext()
+    amp_ctx = (
+        torch.autocast(device_type=device.type, dtype=torch.bfloat16)
+        if cfg.use_amp
+        else nullcontext()
+    )
     try:
         with torch.no_grad(), amp_ctx:
             for task_id in range(n_tasks):

@@ -6,6 +6,7 @@ Ground truth returns are computed analytically from steps_remaining + success.
 
 import random
 from collections import Counter
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -54,6 +55,7 @@ class TrainValueConfig:
 
     num_workers: int = 8
     seed: int = 42
+    use_amp: bool = True
 
 
 def compute_returns(
@@ -294,6 +296,11 @@ def main(cfg: TrainValueConfig):
     # ── Training loop ──
     model.train()
     data_iter = cycle(loader)
+    autocast = (
+        torch.amp.autocast("cuda", dtype=torch.bfloat16)
+        if cfg.use_amp
+        else nullcontext()
+    )
 
     for step in range(1, cfg.total_steps + 1):
         batch = next(data_iter)
@@ -311,9 +318,10 @@ def main(cfg: TrainValueConfig):
                 cfg.c_fail,
             )
 
-        logits = model(batch)
-        targets = ValueModel.returns_to_bins(returns, cfg.value.n_bins)
-        loss = F.cross_entropy(logits, targets)
+        with autocast:
+            logits = model(batch)
+            targets = ValueModel.returns_to_bins(returns, cfg.value.n_bins)
+            loss = F.cross_entropy(logits, targets)
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(params, optimizer_cfg.grad_clip_norm)
