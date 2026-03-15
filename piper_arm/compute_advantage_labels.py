@@ -31,20 +31,25 @@ from piper_arm.value_model import ValueConfig, ValueModel
 
 @dataclass
 class ComputeAdvantageLabelsConfig:
-    value_checkpoint: str = "outputs/value/2026-03-10/14-29-58/checkpoint_40000.pt"
-    # value_checkpoint: str = "outputs/value/2026-03-11/13-01-30/checkpoint_50000.pt"
+    # success
+    # value_checkpoint: str = "outputs/value/2026-03-14/14-48-52/checkpoint_30000.pt"
+    # maha
+    value_checkpoint: str = "outputs/value/2026-03-14/17-36-54/checkpoint_20000.pt"
     pretrained_path: str = "reece-omahoney/smolvla-libero-16-chunk"
     dataset_repo_id: str = "reece-omahoney/libero-10"
     c_fail: float = 1000.0
-    reward_type: str = "steps_remaining"  # "steps_remaining" or "maha_distance"
+    reward_type: str = "maha_distance"  # "steps_remaining" or "maha_distance"
     load_stats: str = "outputs/eval_dist/latest/gauss_stats.npz"
     device: str = "cuda"
     n_step: int = 10
-    advantage_percentile: float = 0.6
+    advantage_percentile: float = 0.7
     batch_size: int = 64
     num_workers: int = 4
     push_to_hub: bool = True
-    new_dataset_repo_id: str = "reece-omahoney/libero-10-steps"
+    # success
+    # new_dataset_repo_id: str = "reece-omahoney/libero-10-success-adv"
+    # maha
+    new_dataset_repo_id: str = "reece-omahoney/libero-10-maha-adv"
 
 
 def load_value_model(checkpoint_path: str, device: torch.device) -> ValueModel:
@@ -281,6 +286,7 @@ def main(cfg: ComputeAdvantageLabelsConfig):
     episode_index = episode_index_all
 
     # Collect task strings (need a sequential pass through the dataset)
+    # TODO: make this efficient
     print("Collecting task strings...")
     tasks: list[str] = []
     task_loader = DataLoader(
