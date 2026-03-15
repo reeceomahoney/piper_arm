@@ -43,8 +43,8 @@ class TrainValueConfig:
     value_pretrained_path: str | None = None
 
     # Training
-    batch_size: int = 256
-    total_steps: int = 100_000
+    batch_size: int = 32
+    total_steps: int = 50_000
 
     # Logging & checkpointing
     log_interval: int = 100
@@ -53,7 +53,7 @@ class TrainValueConfig:
     wandb_project: str | None = "distal-value"
     wandb_run_name: str | None = None
 
-    num_workers: int = 8
+    num_workers: int = 4
     seed: int = 42
     use_amp: bool = True
 
