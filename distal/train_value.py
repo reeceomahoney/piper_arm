@@ -25,7 +25,7 @@ from lerobot.processor.pipeline import EnvTransition, TransitionKey
 from lerobot.utils.constants import POLICY_PREPROCESSOR_DEFAULT_NAME
 from torch.utils.data import DataLoader
 
-from piper_arm.value_model import ValueConfig, ValueModel
+from distal.value_model import ValueConfig, ValueModel
 
 
 @dataclass
@@ -258,7 +258,7 @@ def main(cfg: TrainValueConfig):
         from lerobot.policies.pi05.modeling_pi05 import PI05Policy
         from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 
-        from piper_arm.mahalanobis import compute_maha_distances
+        from distal.mahalanobis import compute_maha_distances
 
         print("Loading policy for Mahalanobis distance computation...")
         env_cfg = LiberoEnvConfig("libero_10", fps=10)

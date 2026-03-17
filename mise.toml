@@ -27,5 +27,5 @@ run = "lerobot-record --config_path configs/play.yaml --policy.path=reece-omahon
 description = "Build Singularity container and upload to cluster"
 run = """
 singularity build --force --fakeroot container.sif container.def
-scp container.sif htc:/data/projects/engs-robotics-ml/kebl6123/piper_arm/container.sif
+scp container.sif htc:/data/projects/engs-robotics-ml/kebl6123/distal/container.sif
 """

@@ -21,9 +21,9 @@ from lerobot.utils.constants import ACTION
 from lerobot.utils.utils import inside_slurm
 from tqdm import tqdm
 
-from piper_arm.train_value import TrainValueConfig as TrainValueConfig
-from piper_arm.train_value import load_value_preprocessor
-from piper_arm.value_model import ValueConfig, ValueModel
+from distal.train_value import TrainValueConfig as TrainValueConfig
+from distal.train_value import load_value_preprocessor
+from distal.value_model import ValueConfig, ValueModel
 
 
 @dataclass

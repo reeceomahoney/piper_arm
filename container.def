@@ -2,11 +2,11 @@ Bootstrap: docker
 From: python:3.10-slim
 
 %files
-    pyproject.toml /opt/piper_arm/pyproject.toml
-    uv.lock /opt/piper_arm/uv.lock
-    README.md /opt/piper_arm/README.md
-    piper_arm /opt/piper_arm/piper_arm
-    lerobot_policy_advantage /opt/piper_arm/lerobot_policy_advantage
+    pyproject.toml /opt/distal/pyproject.toml
+    uv.lock /opt/distal/uv.lock
+    README.md /opt/distal/README.md
+    distal /opt/distal/distal
+    lerobot_policy_advantage /opt/distal/lerobot_policy_advantage
 
 %post
     # EGL vendor config for NVIDIA
@@ -29,10 +29,10 @@ NVJSON
     # Main install
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="/root/.local/bin:$PATH"
-    cd /opt/piper_arm && uv sync --frozen
+    cd /opt/distal && uv sync --frozen
 
     # Suppress robotsuite warning
-    /opt/piper_arm/.venv/bin/python -m robosuite.scripts.setup_macros
+    /opt/distal/.venv/bin/python -m robosuite.scripts.setup_macros
 
 %environment
     export PATH="/root/.local/bin:$PATH"
@@ -43,7 +43,7 @@ NVJSON
     export TOKENIZERS_PARALLELISM=false
 
     # Cache directories
-    export CACHE_DIR=${CACHE_DIR:-/data/engs-robotics-ml/kebl6123/piper_arm/.cache}
+    export CACHE_DIR=${CACHE_DIR:-/data/engs-robotics-ml/kebl6123/distal/.cache}
     export UV_CACHE_DIR=$CACHE_DIR/uv
     export HF_HOME=$CACHE_DIR/huggingface
     export LIBERO_CONFIG_PATH=$CACHE_DIR/libero
@@ -51,5 +51,5 @@ NVJSON
     export TORCHINDUCTOR_CACHE_DIR=$CACHE_DIR/torchinductor
 
 %runscript
-    . /opt/piper_arm/.venv/bin/activate
+    . /opt/distal/.venv/bin/activate
     exec "$@"

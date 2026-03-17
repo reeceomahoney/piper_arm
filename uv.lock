@@ -508,6 +508,51 @@ wheels = [
 ]
 
 [[package]]
+name = "distal"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "lerobot", extra = ["libero", "pi", "smolvla"] },
+    { name = "lerobot-policy-advantage" },
+    { name = "matplotlib" },
+    { name = "opencv-contrib-python" },
+    { name = "piper-sdk" },
+    { name = "pyrealsense2", marker = "sys_platform != 'darwin'" },
+    { name = "pyrealsense2-macosx", marker = "sys_platform == 'darwin'" },
+    { name = "rerun-sdk" },
+    { name = "scikit-learn" },
+    { name = "slurm-tools" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pre-commit" },
+    { name = "ruff" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "lerobot", extras = ["smolvla", "libero", "pi"], git = "https://github.com/reeceomahoney/lerobot?rev=fix%2Frollout-return-observations-nested-dict" },
+    { name = "lerobot-policy-advantage", editable = "lerobot_policy_advantage" },
+    { name = "matplotlib", specifier = ">=3.7.0" },
+    { name = "opencv-contrib-python", specifier = ">=4.12.0.88" },
+    { name = "piper-sdk", specifier = ">=0.6.1" },
+    { name = "pyrealsense2", marker = "sys_platform != 'darwin'", specifier = ">=2.56.5.9235" },
+    { name = "pyrealsense2-macosx", marker = "sys_platform == 'darwin'", specifier = ">=2.54.2" },
+    { name = "rerun-sdk", specifier = ">=0.22" },
+    { name = "scikit-learn", specifier = ">=1.3.0" },
+    { name = "slurm-tools", git = "https://github.com/reeceomahoney/slurm-tools.git" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pre-commit", specifier = ">=4.5.1" },
+    { name = "ruff", specifier = ">=0.15.2" },
+    { name = "ty", specifier = ">=0.0.21" },
+]
+
+[[package]]
 name = "distlib"
 version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1177,14 +1222,14 @@ name = "lerobot-policy-advantage"
 version = "0.1.0"
 source = { editable = "lerobot_policy_advantage" }
 dependencies = [
+    { name = "distal" },
     { name = "lerobot", extra = ["smolvla"] },
-    { name = "piper-arm" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "distal" },
     { name = "lerobot", extras = ["smolvla"], git = "https://github.com/reeceomahoney/lerobot?rev=fix%2Frollout-return-observations-nested-dict" },
-    { name = "piper-arm" },
 ]
 
 [[package]]
@@ -1734,51 +1779,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/1f/e7/7c4552d80052337eb28653b617eafdef39adfb137c49dd7e831b8dc13bc5/pillow-12.1.1-cp312-cp312-win32.whl", hash = "sha256:5d1f9575a12bed9e9eedd9a4972834b08c97a352bd17955ccdebfeca5913fa0a", size = 6328823, upload-time = "2026-02-11T04:21:01.385Z" },
     { url = "https://files.pythonhosted.org/packages/3d/17/688626d192d7261bbbf98846fc98995726bddc2c945344b65bec3a29d731/pillow-12.1.1-cp312-cp312-win_amd64.whl", hash = "sha256:21329ec8c96c6e979cd0dfd29406c40c1d52521a90544463057d2aaa937d66a6", size = 7033367, upload-time = "2026-02-11T04:21:03.536Z" },
     { url = "https://files.pythonhosted.org/packages/ed/fe/a0ef1f73f939b0eca03ee2c108d0043a87468664770612602c63266a43c4/pillow-12.1.1-cp312-cp312-win_arm64.whl", hash = "sha256:af9a332e572978f0218686636610555ae3defd1633597be015ed50289a03c523", size = 2453811, upload-time = "2026-02-11T04:21:05.116Z" },
-]
-
-[[package]]
-name = "piper-arm"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "lerobot", extra = ["libero", "pi", "smolvla"] },
-    { name = "lerobot-policy-advantage" },
-    { name = "matplotlib" },
-    { name = "opencv-contrib-python" },
-    { name = "piper-sdk" },
-    { name = "pyrealsense2", marker = "sys_platform != 'darwin'" },
-    { name = "pyrealsense2-macosx", marker = "sys_platform == 'darwin'" },
-    { name = "rerun-sdk" },
-    { name = "scikit-learn" },
-    { name = "slurm-tools" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pre-commit" },
-    { name = "ruff" },
-    { name = "ty" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "lerobot", extras = ["smolvla", "libero", "pi"], git = "https://github.com/reeceomahoney/lerobot?rev=fix%2Frollout-return-observations-nested-dict" },
-    { name = "lerobot-policy-advantage", editable = "lerobot_policy_advantage" },
-    { name = "matplotlib", specifier = ">=3.7.0" },
-    { name = "opencv-contrib-python", specifier = ">=4.12.0.88" },
-    { name = "piper-sdk", specifier = ">=0.6.1" },
-    { name = "pyrealsense2", marker = "sys_platform != 'darwin'", specifier = ">=2.56.5.9235" },
-    { name = "pyrealsense2-macosx", marker = "sys_platform == 'darwin'", specifier = ">=2.54.2" },
-    { name = "rerun-sdk", specifier = ">=0.22" },
-    { name = "scikit-learn", specifier = ">=1.3.0" },
-    { name = "slurm-tools", git = "https://github.com/reeceomahoney/slurm-tools.git" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pre-commit", specifier = ">=4.5.1" },
-    { name = "ruff", specifier = ">=0.15.2" },
-    { name = "ty", specifier = ">=0.0.21" },
 ]
 
 [[package]]

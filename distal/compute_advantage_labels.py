@@ -24,9 +24,9 @@ from lerobot.envs.configs import LiberoEnv as LiberoEnvConfig
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from torch.utils.data import DataLoader
 
-from piper_arm.train_value import TrainValueConfig as TrainValueConfig
-from piper_arm.train_value import load_value_preprocessor
-from piper_arm.value_model import ValueConfig, ValueModel
+from distal.train_value import TrainValueConfig as TrainValueConfig
+from distal.train_value import load_value_preprocessor
+from distal.value_model import ValueConfig, ValueModel
 
 
 @dataclass
@@ -306,7 +306,7 @@ def main(cfg: ComputeAdvantageLabelsConfig):
         from lerobot.policies.pi05.modeling_pi05 import PI05Policy
         from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 
-        from piper_arm.mahalanobis import compute_maha_distances
+        from distal.mahalanobis import compute_maha_distances
 
         print("Loading policy for Mahalanobis distance computation...")
         env_cfg = LiberoEnvConfig("libero_10", fps=10)

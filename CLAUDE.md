@@ -61,7 +61,7 @@ LeRobot plugin that registers the "advantage" policy type:
 - **modeling_advantage.py** — `AdvantagePolicy`: wraps SmolVLA with learned advantage embeddings and handles advantage label loading from dataset.
 - **configuration_advantage.py** — `AdvantageConfig` dataclass for policy configuration.
 
-### Supporting Modules (`piper_arm/`)
+### Supporting Modules (`distal/`)
 
 - **value_model.py** — `ValueModel` class: SmolVLM + expert with learnable value query token and categorical value head. Vision encoder frozen, VLM + expert trainable.
 - **embedding.py** — VLM prefix extraction for PI05/SmolVLA. Mean-pooled embeddings over image tokens.

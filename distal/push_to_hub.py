@@ -3,7 +3,7 @@
 Push a trained lerobot checkpoint to HuggingFace Hub.
 
 Usage:
-    python -m piper_arm.scripts.push_to_hub \
+    python -m distal.scripts.push_to_hub \
         --checkpoint-dir outputs/train/my_policy/checkpoints/last \
         --repo-id my-username/my-policy
 """

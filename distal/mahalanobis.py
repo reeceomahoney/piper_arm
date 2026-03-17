@@ -11,7 +11,7 @@ from lerobot.utils.utils import inside_slurm
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from piper_arm.embedding import embed_prefix_pooled
+from distal.embedding import embed_prefix_pooled
 
 
 def compute_mahalanobis_np(

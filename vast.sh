@@ -15,14 +15,14 @@ tmux source-file ~/.config/tmux/tmux.conf
 
 # project
 cd /workspace
-git clone git@github.com:reeceomahoney/piper_arm.git
-cd piper_arm
+git clone git@github.com:reeceomahoney/distal.git
+cd distal
 
 # mise
 curl https://mise.run | sh
 echo "eval \"\$(/root/.local/bin/mise activate bash)\"" >> ~/.bashrc
 source ~/.bashrc
-cd /workspace/piper_arm
+cd /workspace/distal
 mise trust
 
 # uv

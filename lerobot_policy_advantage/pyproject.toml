@@ -5,7 +5,7 @@ description = "Advantage-conditioned policy plugin for LeRobot"
 requires-python = ">=3.12, <3.13"
 dependencies = [
   "lerobot[smolvla] @ git+https://github.com/reeceomahoney/lerobot@fix/rollout-return-observations-nested-dict",
-  "piper-arm",
+  "distal",
 ]
 
 [build-system]
