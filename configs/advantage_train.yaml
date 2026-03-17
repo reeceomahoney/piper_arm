@@ -1,5 +1,5 @@
 job_name: smolvla-libero-success-adv
-num_workers: 8
+num_workers: 32
 batch_size: 256
 steps: 100_000
 eval_freq: 10_000
