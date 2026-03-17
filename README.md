@@ -1,6 +1,9 @@
 # DistAL
 
-**Dist**ance-based **A**dvantage **L**earning for robotic imitation learning. A RECAP-style RL pipeline for training VLAs with advantage-conditioned fine-tuning and Mahalanobis distance based rewards, built on top of [LeRobot](https://github.com/huggingface/lerobot).
+**Dist**ance-based **A**dvantage **L**earning for robotic imitation learning. A
+RECAP-style RL pipeline for training VLAs with advantage-conditioned fine-tuning
+and Mahalanobis distance based rewards, built on top of
+[LeRobot](https://github.com/huggingface/lerobot).
 
 ## Pipeline
 
@@ -8,11 +11,16 @@ The system implements a multi-stage training pipeline:
 
 1. **Collect rollouts** — Roll out and record a base VLA policy.
 
-1. **Train value function** — Train a distributional value model using cross-entropy over discretized return bins. Supports both step-based and Mahalanobis distance-based reward signals.
+1. **Train value function** — Train a distributional value model using
+   cross-entropy over discretized return bins. Supports both step-based and
+   Mahalanobis distance-based reward signals.
 
-1. **Compute advantage labels** — Use the trained value model to compute n-step TD advantages for every frame, then binarize them using per-task percentile thresholds.
+1. **Compute advantage labels** — Use the trained value model to compute n-step
+   TD advantages for every frame, then binarize them using per-task percentile
+   thresholds.
 
-1. **Fine-tune with advantage conditioning** — Fine-tune the VLA with binary advantage tokens.
+1. **Fine-tune with advantage conditioning** — Fine-tune the VLA with binary
+   advantage tokens.
 
 ## Project Structure
 
@@ -54,7 +62,9 @@ uv sync
 
 ## Usage
 
-Workflows are driven by [mise](https://mise.jdx.dev/) tasks and YAML configs. Cluster job submission is managed with [slurm-tools](https://github.com/reeceomahoney/slurm-tools).
+Workflows are driven by [mise](https://mise.jdx.dev/) tasks and YAML configs.
+Cluster job submission is managed with
+[slurm-tools](https://github.com/reeceomahoney/slurm-tools).
 
 ```bash
 # Training & evaluation
@@ -79,4 +89,5 @@ uv run slurm run            # Submit SLURM job
 ## Hardware
 
 - **Piper robotic arm** — 6-DOF + gripper, controlled via CAN bus
-- **2x Intel RealSense D435** — wrist-mounted and scene cameras (640x480 @ 30fps)
+- **2x Intel RealSense D435** — wrist-mounted and scene cameras (640x480 @
+  30fps)
