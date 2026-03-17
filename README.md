@@ -54,7 +54,7 @@ uv sync
 
 ## Usage
 
-All workflows are driven by [mise](https://mise.jdx.dev/) tasks and YAML configs. Cluster job submission is managed with [slurm-tools](https://github.com/reeceomahoney/slurm-tools).
+Workflows are driven by [mise](https://mise.jdx.dev/) tasks and YAML configs. Cluster job submission is managed with [slurm-tools](https://github.com/reeceomahoney/slurm-tools).
 
 ```bash
 # Training & evaluation
