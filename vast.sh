@@ -1,20 +1,5 @@
 set -euo pipefail
 
-# preflight: reject instances without NVIDIA EGL
-python3 -c "
-import os; os.environ['PYOPENGL_PLATFORM']='egl'
-from OpenGL import EGL
-d = EGL.eglGetDisplay(EGL.EGL_DEFAULT_DISPLAY)
-assert EGL.eglInitialize(d, None, None), 'EGL init failed'
-v = EGL.eglQueryString(d, EGL.EGL_VENDOR)
-assert b'NVIDIA' in v, f'EGL vendor is {v}, not NVIDIA — no hardware EGL on this host'
-print(f'EGL OK: {v}')
-"
-
-load=$(awk '{print $1}' /proc/loadavg)
-echo "Load average: $load"
-awk '{if ($1 > 2.0) { print "WARNING: High load, likely noisy neighbor. Destroy this instance."; exit 1 }}' /proc/loadavg
-
 # bashrc (fill these in)
 cat >> ~/.bashrc << 'EOF'
 export PYTHONDONTWRITEBYTECODE=1
@@ -44,3 +29,18 @@ mise trust
 
 # uv
 uv sync
+
+# preflight: reject instances without NVIDIA EGL
+python3 -c "
+import os; os.environ['PYOPENGL_PLATFORM']='egl'
+from OpenGL import EGL
+d = EGL.eglGetDisplay(EGL.EGL_DEFAULT_DISPLAY)
+assert EGL.eglInitialize(d, None, None), 'EGL init failed'
+v = EGL.eglQueryString(d, EGL.EGL_VENDOR)
+assert b'NVIDIA' in v, f'EGL vendor is {v}, not NVIDIA — no hardware EGL on this host'
+print(f'EGL OK: {v}')
+"
+
+load=$(awk '{print $1}' /proc/loadavg)
+echo "Load average: $load"
+awk '{if ($1 > 2.0) { print "WARNING: High load, likely noisy neighbor. Destroy this instance."; exit 1 }}' /proc/loadavg
