@@ -2,6 +2,7 @@ host: htc
 remote_path: /data/engs-robotics-ml/kebl6123/distal
 command: >-
   singularity run --nv
+  --bind /data/engs-robotics-ml/kebl6123/.cache:/data/engs-robotics-ml/kebl6123/.cache
   --env "WANDB_API_KEY=${WANDB_API_KEY}"
   --env "HF_TOKEN=${HF_TOKEN}"
   --env "PYTHONPATH=/data/engs-robotics-ml/kebl6123/distal:/data/engs-robotics-ml/kebl6123/distal/lerobot_policy_advantage"
