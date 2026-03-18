@@ -17,6 +17,7 @@ import torch
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import cycle
+from lerobot.optim.schedulers import CosineDecayWithWarmupSchedulerConfig
 from lerobot.policies.factory import make_pre_post_processors
 from torch.utils.data import DataLoader
 
@@ -198,6 +199,8 @@ def main(cfg: TrainValueConfig):
     # ── Optimizer & scheduler ──
     optimizer_cfg = cfg.value.get_optimizer_preset()
     scheduler_cfg = cfg.value.get_scheduler_preset()
+    assert isinstance(scheduler_cfg, CosineDecayWithWarmupSchedulerConfig)
+    scheduler_cfg.num_decay_steps = cfg.total_steps
 
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = optimizer_cfg.build(params)

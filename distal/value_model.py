@@ -51,12 +51,15 @@ class ValueConfig(PreTrainedConfig):
     freeze_vision_encoder: bool = True
     train_expert_only: bool = False
 
-    # Optimizer/scheduler
-    optimizer_lr: float = 2e-5
-    optimizer_weight_decay: float = 0.0
-    optimizer_grad_clip_norm: float = 10.0
+    # Training presets
+    optimizer_lr: float = 1e-4
+    optimizer_betas: tuple[float, float] = (0.9, 0.95)
+    optimizer_eps: float = 1e-8
+    optimizer_weight_decay: float = 1e-10
+    optimizer_grad_clip_norm: float = 10
+
     scheduler_warmup_steps: int = 1_000
-    scheduler_decay_steps: int = 50_000
+    scheduler_decay_steps: int = 30_000
     scheduler_decay_lr: float = 2.5e-6
 
     normalization_mapping: dict[str, NormalizationMode] = field(
