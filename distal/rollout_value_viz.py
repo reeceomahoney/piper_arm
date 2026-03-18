@@ -25,6 +25,10 @@ from distal.train_value import TrainValueConfig as TrainValueConfig
 from distal.train_value import load_value_preprocessor
 from distal.value_model import ValueConfig, ValueModel
 
+# sys.modules["piper_arm"] = distal
+# sys.modules["piper_arm.value_model"] = distal.value_model
+# sys.modules["piper_arm.train_value"] = distal.train_value
+
 
 @dataclass
 class RolloutValueVizConfig:
