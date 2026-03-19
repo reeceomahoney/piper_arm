@@ -34,3 +34,4 @@ eval:
 wandb:
   enable: true
   disable_artifact: true
+  project: distal
