@@ -27,7 +27,7 @@ from distal.value_model import ValueFunction
 @dataclass
 class RolloutValueVizConfig:
     policy_path: str = "reece-omahoney/smolvla-libero-16-chunk"
-    value_checkpoint: str = "outputs/value/2026-03-10/14-29-58/checkpoint_30000.pt"
+    value_checkpoint: str = "reece-omahoney/value-success-expert"
     suite_name: str = "libero_10"
     task_ids: list[int] | None = None
     n_episodes: int = 1

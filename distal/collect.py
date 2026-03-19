@@ -25,9 +25,10 @@ from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.pi05.modeling_pi05 import PI05Policy
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from lerobot.scripts.lerobot_eval import eval_policy as lerobot_eval_policy
+from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.random_utils import set_seed
-from lerobot.utils.utils import get_safe_torch_device, init_logging
+from lerobot.utils.utils import init_logging
 from libero.libero import benchmark
 
 multiprocessing.set_start_method("spawn", force=True)
