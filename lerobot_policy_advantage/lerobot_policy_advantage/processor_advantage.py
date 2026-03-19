@@ -4,13 +4,27 @@ Delegates to SmolVLA's processor since the advantage policy wraps SmolVLA
 and uses identical input/output preprocessing.
 """
 
+import json
+import logging
 from typing import Any
 
 import torch
+from huggingface_hub import hf_hub_download
+from lerobot.datasets.utils import cast_stats_to_numpy
 from lerobot.policies.smolvla.processor_smolvla import make_smolvla_pre_post_processors
 from lerobot.processor import PolicyAction, PolicyProcessorPipeline
 
 from .configuration_advantage import AdvantageConfig
+
+
+def load_stats_from_repo(repo_id: str):
+    """Download meta/stats.json from a HuggingFace dataset repo and parse it."""
+    stats_path = hf_hub_download(
+        repo_id=repo_id, filename="meta/stats.json", repo_type="dataset"
+    )
+    with open(stats_path) as f:
+        stats = json.load(f)
+    return cast_stats_to_numpy(stats)
 
 
 def make_advantage_pre_post_processors(
@@ -21,5 +35,9 @@ def make_advantage_pre_post_processors(
     PolicyProcessorPipeline[PolicyAction, PolicyAction],
 ]:
     """Construct pre/post processors by delegating to SmolVLA's processor."""
+    if config.stats_repo_id is not None:
+        logging.info(f"Loading normalization stats from {config.stats_repo_id}")
+        dataset_stats = load_stats_from_repo(config.stats_repo_id)
+
     smolvla_config = config.to_smolvla_config()
     return make_smolvla_pre_post_processors(smolvla_config, dataset_stats=dataset_stats)
