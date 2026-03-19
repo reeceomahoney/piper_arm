@@ -5,6 +5,8 @@ resources:
   accelerators: H100:1
   cpus: 16+
   disk_size: 64
+  autostop:
+    idle_minutes: 10
 
 envs:
   HF_TOKEN:
