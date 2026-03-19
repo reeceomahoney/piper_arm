@@ -1,8 +1,9 @@
-"""Pre-compute binary advantage labels and add them to a LeRobot dataset.
+"""Pre-compute text advantage labels and add them to a LeRobot dataset.
 
 Loads a trained value model, computes n-step TD advantages, then binarizes
 per-sample advantages using per-task percentile thresholds. Adds an
-`advantage_label` column to the dataset's parquet files.
+`observation.language_advantage_label` column with text strings
+("Advantage: positive" / "Advantage: negative") to the dataset's parquet files.
 
 N-step advantage: A(t) = sum_{k=0}^{N-1} r_{t+k} + V(t+N) - V(t)
 where r = -1/max_ep_len per step. Falls back to MC return when the n-step
@@ -222,12 +223,15 @@ def binarize_advantages(
     advantages: np.ndarray,
     tasks: list[str],
     thresholds: dict[str, float],
-) -> list[int]:
-    """Binarize advantages using per-task thresholds."""
-    labels: list[int] = []
+) -> list[str]:
+    """Binarize advantages using per-task thresholds into text labels."""
+    labels: list[str] = []
     for i, task in enumerate(tasks):
         threshold = thresholds.get(task, 0.0)
-        labels.append(1 if advantages[i] > threshold else 0)
+        if advantages[i] > threshold:
+            labels.append("Advantage: positive")
+        else:
+            labels.append("Advantage: negative")
     return labels
 
 
@@ -358,19 +362,21 @@ def main(cfg: ComputeAdvantageLabelsConfig):
         len(labels) == dataset.num_frames
     ), f"Expected {dataset.num_frames} labels, got {len(labels)}"
 
-    pct_positive = sum(labels) / len(labels) * 100
+    num_positive = sum(1 for label in labels if label == "Advantage: positive")
+    pct_positive = num_positive / len(labels) * 100
     print(
-        f"Labels computed: {pct_positive:.1f}% positive ({sum(labels)}/{len(labels)})"
+        f"Labels computed: {pct_positive:.1f}% positive ({num_positive}/{len(labels)})"
     )
 
     # Save by overwriting parquet files with the new column added
+    col_name = "observation.language_advantage_label"
     data_dir = dataset.root / "data"
-    print(f"Saving advantage_label to parquet files in {data_dir}...")
+    print(f"Saving {col_name} to parquet files in {data_dir}...")
     offset = 0
     for pq_path in sorted(data_dir.glob("*/*.parquet")):
         df = pd.read_parquet(pq_path)
         n = len(df)
-        df["advantage_label"] = labels[offset : offset + n]
+        df[col_name] = labels[offset : offset + n]
         offset += n
         df.to_parquet(pq_path, compression="snappy", index=False)
     assert offset == len(
@@ -381,15 +387,15 @@ def main(cfg: ComputeAdvantageLabelsConfig):
     info_path = dataset.root / "meta" / "info.json"
     with open(info_path) as f:
         info = json.load(f)
-    if "advantage_label" not in info.get("features", {}):
-        info["features"]["advantage_label"] = {
-            "dtype": "int64",
+    if col_name not in info.get("features", {}):
+        info["features"][col_name] = {
+            "dtype": "string",
             "shape": [1],
             "names": None,
         }
         with open(info_path, "w") as f:
             json.dump(info, f, indent=4)
-        print("Updated info.json with advantage_label feature")
+        print(f"Updated info.json with {col_name} feature")
 
     # Push to hub
     if cfg.push_to_hub:

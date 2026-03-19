@@ -5,7 +5,7 @@ prefix (images+language+state) and suffix (noisy actions+time) during training,
 and always set to positive (advantage=1) during inference.
 """
 
-import logging
+import math
 from typing import cast
 
 import torch
@@ -14,52 +14,74 @@ from lerobot.policies.smolvla.modeling_smolvla import (
     VLAFlowMatching,
     make_att_2d_masks,
 )
-from torch import Tensor, nn
+from torch import Tensor
+from transformers import AutoTokenizer
 
 from .configuration_advantage import AdvantageConfig
 
-
-class AdvantageEmbedding(nn.Module):
-    """Learned embedding for binary advantage indicator (negative=0, positive=1)."""
-
-    def __init__(self, hidden_size: int):
-        super().__init__()
-        self.embedding = nn.Embedding(2, hidden_size)
-
-    def forward(self, labels: Tensor) -> Tensor:
-        return self.embedding(labels).unsqueeze(1)
+ADVANTAGE_POSITIVE = "Advantage: positive"
+ADVANTAGE_NEGATIVE = "Advantage: negative"
 
 
 class AdvantageVLAFlowMatching(VLAFlowMatching):
-    """VLAFlowMatching with advantage token injection after the prefix."""
+    """VLAFlowMatching with text-based advantage conditioning in the prefix."""
+
+    # (2, seq_len) stacked token IDs: index 0 = negative, index 1 = positive
+    adv_tokens: Tensor
 
     def __init__(self, config: AdvantageConfig, **kwargs):
         super().__init__(config, **kwargs)
-        vlm_hidden = self.vlm_with_expert.config.text_config.hidden_size
-        self.adv_embedding = AdvantageEmbedding(vlm_hidden)
         self.advantage_dropout = config.advantage_dropout
 
-    def inject_advantage(
-        self, prefix_embs, prefix_pad_masks, prefix_att_masks, adv_labels
-    ):
-        """Inject advantage embedding after prefix with optional dropout."""
-        bsize = prefix_embs.shape[0]
-        device = prefix_embs.device
+        tokenizer = AutoTokenizer.from_pretrained(config.vlm_model_name)
+        assert tokenizer is not None
 
-        adv_embs = self.adv_embedding(adv_labels).to(dtype=prefix_embs.dtype)
+        pos_ids = tokenizer.encode(ADVANTAGE_POSITIVE, add_special_tokens=False)
+        neg_ids = tokenizer.encode(ADVANTAGE_NEGATIVE, add_special_tokens=False)
 
-        # Zero out the embedding for dropped samples (classifier-free guidance)
+        # Pad to same length so we can stack as (2, seq_len)
+        max_len = max(len(pos_ids), len(neg_ids))
+        pad_id = tokenizer.pad_token_id or 0
+        pos_ids += [pad_id] * (max_len - len(pos_ids))
+        neg_ids += [pad_id] * (max_len - len(neg_ids))
+
+        self.register_buffer(
+            "adv_tokens",
+            torch.tensor([neg_ids, pos_ids], dtype=torch.long),
+        )
+
+    def embed_advantage(self, adv_tokens):
+        """Embed advantage tokens via the VLM language embedding layer.
+
+        Args:
+            adv_tokens: (batch, seq_len) token IDs.
+
+        Returns:
+            (adv_embs, adv_pad_masks, adv_att_masks) ready for prefix concat.
+        """
+        adv_embs = self.vlm_with_expert.embed_language_tokens(adv_tokens)
+        embed_dim = adv_embs.shape[-1]
+        adv_embs = adv_embs * math.sqrt(embed_dim)
+
+        bsize = adv_tokens.shape[0]
+        seq_len = adv_tokens.shape[1]
+
+        # Advantage dropout: zero out embeddings for classifier-free guidance
         if self.training and self.advantage_dropout > 0:
-            keep = (torch.rand(bsize, device=device) > self.advantage_dropout).float()
+            keep = (
+                torch.rand(bsize, device=adv_embs.device) > self.advantage_dropout
+            ).float()
             adv_embs = adv_embs * keep[:, None, None]
 
-        adv_pad = torch.ones(bsize, 1, dtype=prefix_pad_masks.dtype, device=device)
-        adv_att = torch.ones(bsize, 1, dtype=prefix_att_masks.dtype, device=device)
+        adv_pad_masks = torch.ones(
+            bsize, seq_len, dtype=torch.bool, device=adv_embs.device
+        )
+        # att_mask=1: causal attention (last tokens in prefix)
+        adv_att_masks = torch.ones(
+            bsize, seq_len, dtype=torch.bool, device=adv_embs.device
+        )
 
-        prefix_embs = torch.cat([prefix_embs, adv_embs], dim=1)
-        prefix_pad_masks = torch.cat([prefix_pad_masks, adv_pad], dim=1)
-        prefix_att_masks = torch.cat([prefix_att_masks, adv_att], dim=1)
-        return prefix_embs, prefix_pad_masks, prefix_att_masks
+        return adv_embs, adv_pad_masks, adv_att_masks
 
     def forward(
         self,
@@ -71,9 +93,9 @@ class AdvantageVLAFlowMatching(VLAFlowMatching):
         actions,
         noise=None,
         time=None,
-        adv_labels=None,
+        adv_tokens=None,
     ) -> Tensor:
-        """Training forward with advantage token injected after prefix."""
+        """Training forward with advantage language tokens in prefix."""
         if noise is None:
             noise = self.sample_noise(actions.shape, actions.device)
         if time is None:
@@ -87,10 +109,12 @@ class AdvantageVLAFlowMatching(VLAFlowMatching):
             images, img_masks, lang_tokens, lang_masks, state=state
         )
 
-        if adv_labels is not None:
-            prefix_embs, prefix_pad_masks, prefix_att_masks = self.inject_advantage(
-                prefix_embs, prefix_pad_masks, prefix_att_masks, adv_labels
-            )
+        if adv_tokens is not None:
+            adv_embs, adv_pad_masks, adv_att_masks = self.embed_advantage(adv_tokens)
+            # Append advantage as the last tokens in the prefix
+            prefix_embs = torch.cat([prefix_embs, adv_embs], dim=1)
+            prefix_pad_masks = torch.cat([prefix_pad_masks, adv_pad_masks], dim=1)
+            prefix_att_masks = torch.cat([prefix_att_masks, adv_att_masks], dim=1)
 
         suffix_embs, suffix_pad_masks, suffix_att_masks = self.embed_suffix(x_t, time)
 
@@ -118,7 +142,7 @@ class AdvantageVLAFlowMatching(VLAFlowMatching):
     def sample_actions(
         self, images, img_masks, lang_tokens, lang_masks, state, noise=None, **kwargs
     ) -> Tensor:
-        """Inference with positive advantage token always injected."""
+        """Inference with positive advantage tokens always injected."""
         bsize = state.shape[0]
         device = state.device
 
@@ -130,11 +154,14 @@ class AdvantageVLAFlowMatching(VLAFlowMatching):
             images, img_masks, lang_tokens, lang_masks, state=state
         )
 
-        # Always inject positive advantage at inference
-        pos_labels = torch.ones(bsize, dtype=torch.long, device=device)
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.inject_advantage(
-            prefix_embs, prefix_pad_masks, prefix_att_masks, pos_labels
-        )
+        # Always inject positive advantage at inference (index 1 = positive)
+        pos_tokens = self.adv_tokens[1].unsqueeze(0).expand(bsize, -1)
+        adv_embs, adv_pad_masks, adv_att_masks = self.embed_advantage(pos_tokens)
+
+        # Append advantage as the last tokens in the prefix
+        prefix_embs = torch.cat([prefix_embs, adv_embs], dim=1)
+        prefix_pad_masks = torch.cat([prefix_pad_masks, adv_pad_masks], dim=1)
+        prefix_att_masks = torch.cat([prefix_att_masks, adv_att_masks], dim=1)
 
         # KV cache forward
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
@@ -184,29 +211,10 @@ class AdvantagePolicy(SmolVLAPolicy):
         )
         self.reset()
 
-        self.advantage_labels: torch.Tensor | None = None
-        if not config.fixed_advantage:
-            dataset_meta = kwargs.get("dataset_meta")
-            assert (
-                dataset_meta is not None
-            ), "dataset_meta is required to load advantage labels"
-            self.advantage_labels = self.load_advantage_labels(dataset_meta.repo_id)
-
-    @staticmethod
-    def load_advantage_labels(repo_id: str) -> torch.Tensor:
-        """Load advantage labels from a HuggingFace dataset repo."""
-        from datasets import load_dataset
-
-        logging.info(f"Loading advantage labels from {repo_id}...")
-        ds = load_dataset(repo_id, split="train")
-        labels = torch.tensor(ds["advantage_label"], dtype=torch.long)
-        logging.info(f"Loaded {len(labels)} advantage labels")
-        return labels
-
     def forward(
         self, batch: dict[str, Tensor], noise=None, time=None, reduction: str = "mean"
     ):
-        """Training forward: resolve advantage labels then delegate to model."""
+        """Training forward: resolve advantage tokens then delegate to model."""
         images, img_masks = self.prepare_images(batch)
         state = self.prepare_state(batch)
         lang_tokens = batch["observation.language_tokens"]
@@ -214,14 +222,19 @@ class AdvantagePolicy(SmolVLAPolicy):
         actions = self.prepare_action(batch)
         actions_is_pad = batch.get("action_is_pad")
 
-        # Resolve advantage labels
+        # Resolve advantage tokens via index into (2, seq_len) buffer
         device = actions.device
         if self.config.fixed_advantage:
-            adv_labels = torch.ones(actions.shape[0], dtype=torch.long, device=device)
+            bsize = actions.shape[0]
+            indices = torch.ones(bsize, dtype=torch.long, device=device)
         else:
-            assert self.advantage_labels is not None
-            indices = batch["index"].long().cpu()
-            adv_labels = self.advantage_labels[indices].to(device)
+            adv_labels = cast(list[str], batch["observation.language_advantage_label"])
+            indices = torch.tensor(
+                [1 if label == ADVANTAGE_POSITIVE else 0 for label in adv_labels],
+                dtype=torch.long,
+                device=device,
+            )
+        adv_tokens = self.model.adv_tokens[indices]
 
         losses = AdvantageVLAFlowMatching.forward(
             self.model,
@@ -233,7 +246,7 @@ class AdvantagePolicy(SmolVLAPolicy):
             actions,
             noise,
             time,
-            adv_labels=adv_labels,
+            adv_tokens=adv_tokens,
         )
 
         assert self.config.action_feature is not None
@@ -248,7 +261,8 @@ class AdvantagePolicy(SmolVLAPolicy):
 
         loss_dict = {}
         if not self.config.fixed_advantage:
-            loss_dict["pct_positive"] = adv_labels.float().mean().item()
+            num_positive = sum(1 for label in adv_labels if label == ADVANTAGE_POSITIVE)
+            loss_dict["pct_positive"] = num_positive / len(adv_labels)
 
         if reduction == "none":
             per_sample_loss = losses.mean(dim=(1, 2))
