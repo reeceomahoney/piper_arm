@@ -5,9 +5,9 @@ env:
   task: libero_10
   task_ids: [9]
   fps: 10
+  process_isolation: true
 
 eval:
   n_episodes: 5
   batch_size: 5
-  use_async_envs: true
 

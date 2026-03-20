@@ -12,6 +12,7 @@ env:
   type: libero
   task: libero_10
   fps: 10
+  process_isolation: true
 
 # these are overriden when finetuning
 policy:
@@ -30,7 +31,6 @@ policy:
 eval:
   n_episodes: 5
   batch_size: 5
-  use_async_envs: true
 
 wandb:
   enable: true

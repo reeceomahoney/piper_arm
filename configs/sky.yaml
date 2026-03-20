@@ -11,7 +11,7 @@ resources:
 envs:
   HF_TOKEN:
   WANDB_API_KEY:
-  MUJOCO_GL: osmesa
+  MUJOCO_GL: egl
 
 workdir: .
 
