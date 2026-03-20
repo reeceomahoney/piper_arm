@@ -27,13 +27,14 @@ from distal.value_model import ValueConfig, ValueFunction
 @dataclass
 class TrainValueConfig:
     dataset_repo_id: str = "reece-omahoney/libero-10"
-    dataset_root: str | None = None
-    pretrained_path: str = "reece-omahoney/smolvla-libero-16-chunk"
+    base_policy: str = "reece-omahoney/adv-libero-base"
     c_fail: float = 1000.0
     reward_type: str = "steps_remaining"  # "steps_remaining" or "maha_distance"
     load_stats: str = "outputs/eval_dist/latest/gauss_stats.npz"
 
     value: ValueConfig = field(default_factory=ValueConfig)
+    value_repo_id: str = "reece-omahoney/value-success-expert"
+    push_to_hub: bool = False
 
     # Training
     batch_size: int = 32
@@ -159,10 +160,7 @@ def main(cfg: TrainValueConfig):
         )
 
     # ── Dataset ──
-    ds_kwargs: dict = {"repo_id": cfg.dataset_repo_id}
-    if cfg.dataset_root:
-        ds_kwargs["root"] = cfg.dataset_root
-    dataset = LeRobotDataset(**ds_kwargs)
+    dataset = LeRobotDataset(cfg.dataset_repo_id)
 
     frame_index = np.array([s.item() for s in dataset.hf_dataset["frame_index"]])
     episode_index = np.array([s.item() for s in dataset.hf_dataset["episode_index"]])
@@ -191,9 +189,9 @@ def main(cfg: TrainValueConfig):
     else:
         model = ValueFunction(cfg.value)
     model = model.to(device)
-    policy_cfg = PreTrainedConfig.from_pretrained(cfg.pretrained_path)
+    policy_cfg = PreTrainedConfig.from_pretrained(cfg.base_policy)
     preprocessor, _ = make_pre_post_processors(
-        policy_cfg, pretrained_path=cfg.pretrained_path
+        policy_cfg, pretrained_path=cfg.base_policy
     )
 
     # ── Optimizer & scheduler ──
@@ -224,8 +222,8 @@ def main(cfg: TrainValueConfig):
 
         print("Loading policy for Mahalanobis distance computation...")
         env_cfg = LiberoEnvConfig("libero_10", fps=10)
-        policy_cfg = PreTrainedConfig.from_pretrained(cfg.pretrained_path)
-        policy_cfg.pretrained_path = Path(cfg.pretrained_path)
+        policy_cfg = PreTrainedConfig.from_pretrained(cfg.base_policy)
+        policy_cfg.pretrained_path = Path(cfg.base_policy)
         policy_cfg.device = str(device)
         maha_policy = make_policy(cfg=policy_cfg, env_cfg=env_cfg)
         assert isinstance(maha_policy, (PI05Policy, SmolVLAPolicy))
@@ -319,6 +317,11 @@ def main(cfg: TrainValueConfig):
     final_dir = output_dir / "checkpoint_final"
     model.save_pretrained(final_dir)
     print(f"Training complete. Final checkpoint: {final_dir}")
+
+    # Push to hub
+    if cfg.push_to_hub:
+        model.push_to_hub(cfg.value_repo_id)
+        print(f"Pushed to https://huggingface.co/{cfg.value_repo_id}")
 
 
 if __name__ == "__main__":
