@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12, <3.13"
 dependencies = [
-  "lerobot[smolvla, libero, pi] @ git+https://github.com/reeceomahoney/lerobot@fix/libero-async-envs",
+  "lerobot[smolvla, libero, pi] @ git+https://github.com/reeceomahoney/lerobot@feat/libero-process-isolation",
   "piper-sdk>=0.6.1",
   "opencv-contrib-python>=4.12.0.88",
   "pyrealsense2-macosx>=2.54.2; sys_platform == 'darwin'",

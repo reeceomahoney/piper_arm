@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Advantage-conditioned policy plugin for LeRobot"
 requires-python = ">=3.12, <3.13"
 dependencies = [
-  "lerobot[smolvla] @ git+https://github.com/reeceomahoney/lerobot@fix/libero-async-envs",
+  "lerobot[smolvla] @ git+https://github.com/reeceomahoney/lerobot@feat/libero-process-isolation",
   "distal",
 ]
 
