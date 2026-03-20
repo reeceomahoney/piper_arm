@@ -7,6 +7,7 @@ from typing import Any, Union
 import draccus
 import numpy as np
 import torch
+from huggingface_hub import HfApi
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_policy, make_pre_post_processors
@@ -111,6 +112,7 @@ def fit_gaussian_from_dataset(
 class MahaStatsConfig:
     policy_path: str = "reece-omahoney/adv-libero-base"
     dataset_repo_id: str = "lerobot/libero"
+    hub_repo_id: str = "reece-omahoney/maha-stats"
     output_path: str = "outputs/maha/stats.npz"
     device: str = "cuda"
     batch_size: int = 32
@@ -151,11 +153,21 @@ def main(cfg: MahaStatsConfig):
         num_workers=cfg.num_workers,
     )
 
-    # Save
+    # Save locally
     output_path = Path(cfg.output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(output_path, mean=mean, cov_inv=cov_inv)
     print(f"Saved Mahalanobis stats to {output_path}")
+
+    # Push to Hugging Face Hub
+    api = HfApi()
+    api.create_repo(cfg.hub_repo_id, repo_type="dataset", exist_ok=True)
+    api.upload_file(
+        path_or_fileobj=str(output_path),
+        path_in_repo="stats.npz",
+        repo_id=cfg.hub_repo_id,
+    )
+    print(f"Pushed stats to https://huggingface.co/{cfg.hub_repo_id}")
 
 
 if __name__ == "__main__":

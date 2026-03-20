@@ -31,7 +31,7 @@ class TrainValueConfig:
     dataset_repo_id: str = "reece-omahoney/libero-10"
     c_fail: float = 1000.0
     reward_type: str = "steps_remaining"  # "steps_remaining" or "maha_distance"
-    stats_path: str = "outputs/maha/stats.npz"
+    stats_repo_id: str = "reece-omahoney/maha-stats"
     base_policy: str = "reece-omahoney/adv-libero-base"
 
     value: ValueConfig = field(default_factory=ValueConfig)
@@ -212,6 +212,7 @@ def main(cfg: TrainValueConfig):
     maha_norm = None
     maha_returns_tensor = None
     if cfg.reward_type == "maha_distance":
+        from huggingface_hub import hf_hub_download
         from lerobot.configs.policies import PreTrainedConfig
         from lerobot.policies.factory import make_policy
         from lerobot.policies.pi05.modeling_pi05 import PI05Policy
@@ -219,10 +220,13 @@ def main(cfg: TrainValueConfig):
 
         from distal.compute_maha_stats import compute_maha_distances
 
-        data = np.load(cfg.stats_path)
+        stats_file = hf_hub_download(cfg.stats_repo_id, "stats.npz")
+        data = np.load(stats_file)
         gauss_mean = data["mean"]
         gauss_cov_inv = data["cov_inv"]
-        print(f"Loaded Gaussian stats from {cfg.stats_path}, dim={gauss_mean.shape[0]}")
+        print(
+            f"Loaded Gaussian stats from {cfg.stats_repo_id}, dim={gauss_mean.shape[0]}"
+        )
 
         print("Loading policy for Mahalanobis distance computation...")
         policy_cfg = PreTrainedConfig.from_pretrained(cfg.base_policy)
