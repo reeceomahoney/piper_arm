@@ -36,7 +36,7 @@ multiprocessing.set_start_method("spawn", force=True)
 
 @dataclass
 class EvalDistConfig:
-    policy_path: str = "reece-omahoney/smolvla-libero-16-chunk"
+    policy_path: str = "reece-omahoney/adv-libero-base"
     base_dataset_repo_id: str = "lerobot/libero"
     n_episodes: int = 50
     n_envs: int = 5
