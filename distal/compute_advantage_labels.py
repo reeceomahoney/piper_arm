@@ -303,7 +303,9 @@ def main(cfg: ComputeAdvantageLabelsConfig):
 
         from distal.compute_maha_stats import compute_maha_distances
 
-        stats_file = hf_hub_download(cfg.stats_repo_id, "stats.safetensors")
+        stats_file = hf_hub_download(
+            cfg.stats_repo_id, "stats.safetensors", repo_type="dataset"
+        )
         data = load_file(stats_file)
         gauss_mean = data["mean"]
         gauss_cov_inv = data["cov_inv"]
