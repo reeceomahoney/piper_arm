@@ -48,7 +48,6 @@ class TrainValueConfig:
     save_interval: int = 10_000
     output_dir: str | None = None
     wandb_project: str | None = "distal-value"
-    wandb_run_name: str | None = None
 
     num_workers: int = 4
     seed: int = 42
@@ -157,7 +156,7 @@ def main(cfg: TrainValueConfig):
 
         wandb.init(
             project=cfg.wandb_project,
-            name=cfg.wandb_run_name,
+            name=cfg.value_repo_id.split("/")[-1],
             config=vars(cfg),
             dir=str(output_dir),
         )
