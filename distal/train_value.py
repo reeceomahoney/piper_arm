@@ -5,6 +5,7 @@ Ground truth returns are computed analytically from steps_remaining + success.
 """
 
 import random
+import time
 from collections import Counter
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -263,7 +264,10 @@ def main(cfg: TrainValueConfig):
     )
 
     for step in range(1, cfg.total_steps + 1):
+        dataloading_start = time.perf_counter()
         batch = next(data_iter)
+        dataloading_s = time.perf_counter() - dataloading_start
+
         success = batch.get("success")
         indices = batch["index"].long().to(device)
         batch = preprocessor(batch)
@@ -281,6 +285,7 @@ def main(cfg: TrainValueConfig):
 
         batch["returns"] = returns
 
+        update_start = time.perf_counter()
         with autocast:
             loss, info = model(batch)
 
@@ -289,6 +294,7 @@ def main(cfg: TrainValueConfig):
         optimizer.step()
         optimizer.zero_grad()
         scheduler.step()
+        update_s = time.perf_counter() - update_start
 
         # ── Logging ──
         if step % cfg.log_interval == 0:
@@ -296,12 +302,15 @@ def main(cfg: TrainValueConfig):
                 "loss": loss.item(),
                 "mae": info["mae"],
                 "lr": scheduler.get_last_lr()[0],
+                "update_s": update_s,
+                "dataloading_s": dataloading_s,
                 "step": step,
             }
             lr_str = f"{log['lr']:.2e}"
             print(
                 f"[step {step:>6d}] loss={log['loss']:.4f}"
                 f"  mae={log['mae']:.4f}  lr={lr_str}"
+                f"  update_s={update_s:.3f}  dataloading_s={dataloading_s:.3f}"
             )
             if cfg.wandb_project:
                 wandb.log(log, step=step)
