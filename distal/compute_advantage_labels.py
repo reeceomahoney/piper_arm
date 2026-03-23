@@ -28,14 +28,11 @@ from distal.value_model import ValueFunction
 
 @dataclass
 class ComputeAdvantageLabelsConfig:
-    # success
-    # value_checkpoint: str = "outputs/value/2026-03-14/14-48-52/checkpoint_30000.pt"
-    # maha
-    value_checkpoint: str = "outputs/value/2026-03-14/17-36-54/checkpoint_20000.pt"
-    pretrained_path: str = "reece-omahoney/smolvla-libero-16-chunk"
+    value_checkpoint: str = "reece-omahoney/value-success-expert"
+    pretrained_path: str = "reece-omahoney/adv-libero-base"
     dataset_repo_id: str = "reece-omahoney/libero-10"
     c_fail: float = 1000.0
-    reward_type: str = "maha_distance"  # "steps_remaining" or "maha_distance"
+    reward_type: str = "steps_remaining"  # "steps_remaining" or "maha_distance"
     stats_repo_id: str = "reece-omahoney/maha-stats"
     device: str = "cuda"
     n_step: int = 10
@@ -43,10 +40,7 @@ class ComputeAdvantageLabelsConfig:
     batch_size: int = 64
     num_workers: int = 4
     push_to_hub: bool = True
-    # success
-    # new_dataset_repo_id: str = "reece-omahoney/libero-10-success-adv"
-    # maha
-    new_dataset_repo_id: str = "reece-omahoney/libero-10-maha-adv"
+    new_dataset_repo_id: str = "reece-omahoney/libero-10-adv-success-expert"
 
 
 def compute_all_values(

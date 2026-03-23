@@ -37,7 +37,7 @@ class TrainValueConfig:
 
     value: ValueConfig = field(default_factory=ValueConfig)
     value_repo_id: str = "reece-omahoney/value-maha-expert"
-    push_to_hub: bool = False
+    push_to_hub: bool = True
 
     # Training
     batch_size: int = 32
