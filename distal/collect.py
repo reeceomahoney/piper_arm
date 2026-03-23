@@ -118,7 +118,6 @@ def main(cfg: EvalDistConfig):
         fps=int(base_meta.fps),
         features=features,
         streaming_encoding=True,
-        vcodec="auto",
     )
 
     # ── Rollout ──
