@@ -38,8 +38,8 @@ class ComputeAdvantageLabelsConfig:
     device: str = "cuda"
     n_step: int = 10
     advantage_percentile: float = 0.7
-    batch_size: int = 64
-    num_workers: int = 4
+    batch_size: int = 256
+    num_workers: int = 16
     push_to_hub: bool = True
     new_dataset_repo_id: str = "reece-omahoney/libero-10-adv-success-expert"
 
@@ -216,15 +216,12 @@ def binarize_advantages(
     advantages: np.ndarray,
     tasks: list[str],
     thresholds: dict[str, float],
-) -> list[str]:
-    """Binarize advantages using per-task thresholds into text labels."""
-    labels: list[str] = []
+) -> list[int]:
+    """Binarize advantages using per-task thresholds."""
+    labels: list[int] = []
     for i, task in enumerate(tasks):
         threshold = thresholds.get(task, 0.0)
-        if advantages[i] > threshold:
-            labels.append("Advantage: positive")
-        else:
-            labels.append("Advantage: negative")
+        labels.append(1 if advantages[i] > threshold else 0)
     return labels
 
 
@@ -354,7 +351,7 @@ def main(cfg: ComputeAdvantageLabelsConfig):
         len(labels) == dataset.num_frames
     ), f"Expected {dataset.num_frames} labels, got {len(labels)}"
 
-    num_positive = sum(1 for label in labels if label == "Advantage: positive")
+    num_positive = sum(labels)
     pct_positive = num_positive / len(labels) * 100
     print(
         f"Labels computed: {pct_positive:.1f}% positive ({num_positive}/{len(labels)})"
@@ -381,7 +378,7 @@ def main(cfg: ComputeAdvantageLabelsConfig):
         info = json.load(f)
     if col_name not in info.get("features", {}):
         info["features"][col_name] = {
-            "dtype": "string",
+            "dtype": "int64",
             "shape": [1],
             "names": None,
         }

@@ -229,12 +229,8 @@ class AdvantagePolicy(SmolVLAPolicy):
             bsize = actions.shape[0]
             indices = torch.ones(bsize, dtype=torch.long, device=device)
         else:
-            adv_labels = cast(list[str], batch["observation.language.advantage_label"])
-            indices = torch.tensor(
-                [1 if label == ADVANTAGE_POSITIVE else 0 for label in adv_labels],
-                dtype=torch.long,
-                device=device,
-            )
+            adv_labels = batch["observation.language.advantage_label"]
+            indices = adv_labels.to(dtype=torch.long, device=device)
         adv_tokens = self.model.adv_tokens[indices]
 
         losses = AdvantageVLAFlowMatching.forward(
@@ -262,8 +258,7 @@ class AdvantagePolicy(SmolVLAPolicy):
 
         loss_dict = {}
         if not self.config.fixed_advantage:
-            num_positive = sum(1 for label in adv_labels if label == ADVANTAGE_POSITIVE)
-            loss_dict["pct_positive"] = num_positive / len(adv_labels)
+            loss_dict["pct_positive"] = indices.float().mean().item()
 
         if reduction == "none":
             per_sample_loss = losses.mean(dim=(1, 2))
