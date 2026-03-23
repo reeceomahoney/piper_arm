@@ -7,6 +7,7 @@ resources:
   disk_size: 64
   autostop:
     idle_minutes: 10
+    down: true
 
 envs:
   HF_TOKEN:
@@ -41,4 +42,4 @@ setup: |
 
 run: |
   cd ~/sky_workdir
-  uv run mise run train
+  uv run mise run adv-train
