@@ -231,7 +231,11 @@ class AdvantagePolicy(SmolVLAPolicy):
         else:
             adv_labels = batch["observation.language.advantage_label"]
             indices = adv_labels.to(dtype=torch.long, device=device)
-        adv_tokens = self.model.adv_tokens[indices][:, -1, :]
+        adv_tokens = (
+            self.model.adv_tokens[indices][:, -1, :]
+            if indices.ndim > 1
+            else self.model.adv_tokens[indices]
+        )
 
         losses = AdvantageVLAFlowMatching.forward(
             self.model,

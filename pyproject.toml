@@ -16,7 +16,7 @@ dependencies = [
   "lerobot_policy_advantage",
   "slurm-tools",
   "vastai>=0.2.8",
-  "skypilot[vast]>=0.8",
+  "skypilot[vast, kubernetes]>=0.8",
 ]
 
 [dependency-groups]
