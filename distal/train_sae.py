@@ -211,7 +211,7 @@ def main(cfg: TrainSAEConfig):
         train_l1_sum = 0.0
         train_steps = 0
 
-        for (batch_tokens,) in train_loader:
+        for (batch_tokens,) in tqdm(train_loader, desc=f"Epoch {epoch} train"):
             batch_tokens = batch_tokens.to(device)
             with autocast:
                 loss, info = model.compute_loss(batch_tokens)
@@ -234,7 +234,7 @@ def main(cfg: TrainSAEConfig):
         val_steps = 0
 
         with torch.no_grad():
-            for (batch_tokens,) in val_loader:
+            for (batch_tokens,) in tqdm(val_loader, desc=f"Epoch {epoch} val"):
                 batch_tokens = batch_tokens.to(device)
                 with autocast:
                     _, info = model.compute_loss(batch_tokens)
