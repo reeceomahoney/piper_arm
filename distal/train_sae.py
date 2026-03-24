@@ -37,7 +37,7 @@ class TrainSAEConfig:
     lr: float = 1e-4
     weight_decay: float = 1e-5
     batch_size: int = 128
-    epochs: int = 100
+    epochs: int = 20
     grad_clip: float = 1.0
     early_stopping_patience: int = 10
     val_fraction: float = 0.1
