@@ -52,7 +52,7 @@ def main(cfg: CompareOODConfig):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load policy + dataset
-    dataset = LeRobotDataset(repo_id=cfg.dataset_repo_id)
+    dataset = LeRobotDataset(repo_id=cfg.dataset_repo_id, episodes=list(range(100)))
     print(f"Dataset: {dataset.num_episodes} episodes, {dataset.num_frames} frames")
 
     policy_cfg = PreTrainedConfig.from_pretrained(cfg.policy_path)
@@ -91,7 +91,7 @@ def main(cfg: CompareOODConfig):
     loader = DataLoader(
         dataset,
         batch_size=cfg.batch_size,
-        shuffle=False,
+        shuffle=True,
         num_workers=cfg.num_workers,
         pin_memory=True,
         drop_last=False,
