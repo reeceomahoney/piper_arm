@@ -158,14 +158,19 @@ def main(cfg: TrainSAEConfig):
     n_samples, n_tokens, token_dim = all_tokens.shape
     print(f"Extracted {n_samples} samples, {n_tokens} tokens, dim={token_dim}")
 
+    # Flatten to individual tokens for per-token SAE training
+    all_individual_tokens = all_tokens.reshape(-1, token_dim)
+    n_total = all_individual_tokens.shape[0]
+    print(f"Flattened to {n_total} individual tokens")
+
     # Train/val split
-    indices = np.random.permutation(n_samples)
-    val_size = int(n_samples * cfg.val_fraction)
+    indices = np.random.permutation(n_total)
+    val_size = int(n_total * cfg.val_fraction)
     val_idx = indices[:val_size]
     train_idx = indices[val_size:]
 
-    train_dataset = TensorDataset(all_tokens[train_idx])
-    val_dataset = TensorDataset(all_tokens[val_idx])
+    train_dataset = TensorDataset(all_individual_tokens[train_idx])
+    val_dataset = TensorDataset(all_individual_tokens[val_idx])
     train_loader = DataLoader(
         train_dataset, batch_size=cfg.batch_size, shuffle=True, drop_last=True
     )
@@ -174,9 +179,9 @@ def main(cfg: TrainSAEConfig):
     )
     print(f"Train: {len(train_idx)}, Val: {len(val_idx)}")
 
-    # Construct SAE (input_dim = n_tokens * token_dim, flattened)
+    # Construct SAE (per-token: input_dim = token_dim)
     sae_config = SAEConfig(
-        input_dim=n_tokens * token_dim,
+        input_dim=token_dim,
         expansion_factor=cfg.expansion_factor,
         l1_penalty=cfg.l1_penalty,
     )

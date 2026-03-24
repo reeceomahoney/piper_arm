@@ -1,4 +1,9 @@
-"""Sparse Autoencoder for OOD detection on VLM prefix token activations."""
+"""Sparse Autoencoder for OOD detection on VLM prefix token activations.
+
+Operates per-token: encoder/decoder take individual token vectors (token_dim),
+not the full flattened sequence. For OOD scoring, per-token reconstruction
+errors are averaged across the sequence.
+"""
 
 import json
 import tempfile
@@ -37,60 +42,49 @@ class SparseAutoencoder(nn.Module):
         nn.init.zeros_(self.decoder.bias)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Encode and decode input activations.
+        """Encode and decode individual token vectors.
 
         Args:
-            x: (B, n_tokens, token_dim) or (B, input_dim).
+            x: (B, input_dim) individual tokens.
 
         Returns:
-            (reconstruction, features) where reconstruction matches input shape.
+            (reconstruction, features) both (B, D) tensors.
         """
-        input_shape = x.shape
-        if x.ndim == 3:
-            x = x.reshape(x.shape[0], -1)
-
         features = self.activation(self.encoder(x))
         reconstruction = self.decoder(features)
-
-        if len(input_shape) == 3:
-            reconstruction = reconstruction.reshape(input_shape)
-
         return reconstruction, features
 
     def compute_loss(self, x: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute MSE reconstruction loss + L1 sparsity penalty.
 
+        Args:
+            x: (B, input_dim) individual tokens.
+
         Returns:
             (loss_tensor, {"mse": ..., "l1": ..., "loss": ...})
         """
         reconstruction, features = self.forward(x)
-        if x.ndim == 3:
-            x_flat = x.reshape(x.shape[0], -1)
-        else:
-            x_flat = x
-        recon_flat = reconstruction.reshape(x_flat.shape)
-
-        mse = F.mse_loss(recon_flat, x_flat)
+        mse = F.mse_loss(reconstruction, x)
         l1 = features.abs().mean()
         loss = mse + self.config.l1_penalty * l1
         return loss, {"mse": mse.item(), "l1": l1.item(), "loss": loss.item()}
 
     def reconstruction_error(self, x: torch.Tensor) -> torch.Tensor:
-        """Per-sample mean squared reconstruction error (OOD score).
+        """Per-sample OOD score from a sequence of tokens.
+
+        Computes per-token MSE then averages across the sequence.
 
         Args:
-            x: (B, n_tokens, token_dim) or (B, input_dim).
+            x: (B, n_tokens, token_dim) sequence of token activations.
 
         Returns:
-            (B,) tensor of per-sample MSE values.
+            (B,) tensor of mean reconstruction errors.
         """
-        reconstruction, _ = self.forward(x)
-        if x.ndim == 3:
-            x_flat = x.reshape(x.shape[0], -1)
-        else:
-            x_flat = x
-        recon_flat = reconstruction.reshape(x_flat.shape)
-        return ((recon_flat - x_flat) ** 2).mean(dim=-1)
+        b, t, d = x.shape
+        flat = x.reshape(b * t, d)
+        recon, _ = self.forward(flat)
+        per_token_mse = ((recon - flat) ** 2).mean(dim=-1)
+        return per_token_mse.reshape(b, t).mean(dim=-1)
 
     def save_pretrained(self, path: str | Path) -> None:
         path = Path(path)
