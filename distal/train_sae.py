@@ -33,10 +33,10 @@ class TrainSAEConfig:
 
     # SAE hyperparams
     expansion_factor: int = 1
-    l1_penalty: float = 0.3
+    l1_penalty: float = 0.01
     lr: float = 1e-4
     weight_decay: float = 1e-5
-    batch_size: int = 128
+    batch_size: int = 1024
     epochs: int = 20
     grad_clip: float = 1.0
     early_stopping_patience: int = 10
@@ -44,8 +44,8 @@ class TrainSAEConfig:
 
     # Infrastructure
     device: str = "cuda"
-    embedding_batch_size: int = 32
-    num_workers: int = 4
+    embedding_batch_size: int = 128
+    num_workers: int = 16
     seed: int = 42
     use_amp: bool = True
     wandb_project: str | None = "distal-sae"
@@ -172,10 +172,18 @@ def main(cfg: TrainSAEConfig):
     train_dataset = TensorDataset(all_individual_tokens[train_idx])
     val_dataset = TensorDataset(all_individual_tokens[val_idx])
     train_loader = DataLoader(
-        train_dataset, batch_size=cfg.batch_size, shuffle=True, drop_last=True
+        train_dataset,
+        batch_size=cfg.batch_size,
+        shuffle=True,
+        drop_last=True,
+        num_workers=cfg.num_workers,
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=cfg.batch_size, shuffle=False, drop_last=False
+        val_dataset,
+        batch_size=cfg.batch_size,
+        shuffle=False,
+        drop_last=False,
+        num_workers=cfg.num_workers,
     )
     print(f"Train: {len(train_idx)}, Val: {len(val_idx)}")
 
@@ -211,7 +219,9 @@ def main(cfg: TrainSAEConfig):
         train_l1_sum = 0.0
         train_steps = 0
 
-        for (batch_tokens,) in tqdm(train_loader, desc=f"Epoch {epoch} train"):
+        for (batch_tokens,) in tqdm(
+            train_loader, desc=f"Epoch {epoch} train", leave=False
+        ):
             batch_tokens = batch_tokens.to(device)
             with autocast:
                 loss, info = model.compute_loss(batch_tokens)
@@ -234,7 +244,9 @@ def main(cfg: TrainSAEConfig):
         val_steps = 0
 
         with torch.no_grad():
-            for (batch_tokens,) in tqdm(val_loader, desc=f"Epoch {epoch} val"):
+            for (batch_tokens,) in tqdm(
+                val_loader, desc=f"Epoch {epoch} train", leave=False
+            ):
                 batch_tokens = batch_tokens.to(device)
                 with autocast:
                     _, info = model.compute_loss(batch_tokens)
