@@ -1,4 +1,4 @@
-"""Train a Sparse Autoencoder on VLM prefix embeddings for OOD detection."""
+"""Train a Sparse Autoencoder on VLM prefix token activations for OOD detection."""
 
 import random
 from contextlib import nullcontext
@@ -20,7 +20,7 @@ from lerobot.utils.utils import init_logging, inside_slurm
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
-from distal.embedding import embed_prefix_pooled
+from distal.embedding import embed_prefix_tokens
 from distal.sae import SAEConfig, SparseAutoencoder
 
 
@@ -50,10 +50,10 @@ class TrainSAEConfig:
     use_amp: bool = True
     wandb_project: str | None = "distal-sae"
     push_to_hub: bool = True
-    embedding_cache_path: str = "outputs/sae/embedding_cache.pt"
+    token_cache_path: str = "outputs/sae/token_cache.pt"
 
 
-def extract_all_embeddings(
+def extract_all_tokens(
     policy: PI05Policy | SmolVLAPolicy,
     preprocessor,
     dataset: LeRobotDataset,
@@ -61,10 +61,10 @@ def extract_all_embeddings(
     num_workers: int,
     device: torch.device,
 ) -> torch.Tensor:
-    """Extract mean-pooled VLM prefix embeddings from the dataset.
+    """Extract image token activations from the dataset.
 
     Returns:
-        (N, hidden_dim) float32 tensor.
+        (N, n_img_tokens, hidden_dim) float32 tensor.
     """
     loader = DataLoader(
         dataset,
@@ -74,17 +74,17 @@ def extract_all_embeddings(
         pin_memory=True,
         drop_last=False,
     )
-    all_embeddings = []
-    for batch in tqdm(loader, desc="Extracting embeddings", disable=inside_slurm()):
+    all_tokens = []
+    for batch in tqdm(loader, desc="Extracting tokens", disable=inside_slurm()):
         batch = {
             k: v.to(device) if isinstance(v, torch.Tensor) else v
             for k, v in batch.items()
         }
         batch = preprocessor(batch)
-        emb = embed_prefix_pooled(policy, batch)
-        all_embeddings.append(emb.cpu())
+        tokens = embed_prefix_tokens(policy, batch)
+        all_tokens.append(tokens.cpu())
 
-    return torch.cat(all_embeddings, dim=0)
+    return torch.cat(all_tokens, dim=0)
 
 
 @draccus.wrap()
@@ -122,11 +122,11 @@ def main(cfg: TrainSAEConfig):
             dir=str(output_dir),
         )
 
-    # Extract all embeddings (or load from cache)
-    cache_path = Path(cfg.embedding_cache_path)
+    # Extract all token activations (or load from cache)
+    cache_path = Path(cfg.token_cache_path)
     if cache_path.exists():
-        print(f"Loading cached embeddings from {cache_path}")
-        all_embeddings = torch.load(cache_path, weights_only=True)
+        print(f"Loading cached tokens from {cache_path}")
+        all_tokens = torch.load(cache_path, weights_only=True)
     else:
         dataset = LeRobotDataset(repo_id=cfg.dataset_repo_id)
         print(f"Dataset: {dataset.num_episodes} episodes, {dataset.num_frames} frames")
@@ -143,7 +143,7 @@ def main(cfg: TrainSAEConfig):
             policy_cfg=policy_cfg, pretrained_path=str(policy_cfg.pretrained_path)
         )
 
-        all_embeddings = extract_all_embeddings(
+        all_tokens = extract_all_tokens(
             policy,
             preprocessor,
             dataset,
@@ -152,10 +152,10 @@ def main(cfg: TrainSAEConfig):
             device,
         )
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(all_embeddings, cache_path)
-        print(f"Saved embedding cache to {cache_path}")
-    n_samples, hidden_dim = all_embeddings.shape
-    print(f"Extracted {n_samples} samples, dim={hidden_dim}")
+        torch.save(all_tokens, cache_path)
+        print(f"Saved token cache to {cache_path}")
+    n_samples, n_tokens, token_dim = all_tokens.shape
+    print(f"Extracted {n_samples} samples, {n_tokens} tokens, dim={token_dim}")
 
     # Train/val split
     indices = np.random.permutation(n_samples)
@@ -163,8 +163,8 @@ def main(cfg: TrainSAEConfig):
     val_idx = indices[:val_size]
     train_idx = indices[val_size:]
 
-    train_dataset = TensorDataset(all_embeddings[train_idx])
-    val_dataset = TensorDataset(all_embeddings[val_idx])
+    train_dataset = TensorDataset(all_tokens[train_idx])
+    val_dataset = TensorDataset(all_tokens[val_idx])
     train_loader = DataLoader(
         train_dataset, batch_size=cfg.batch_size, shuffle=True, drop_last=True
     )
@@ -173,9 +173,9 @@ def main(cfg: TrainSAEConfig):
     )
     print(f"Train: {len(train_idx)}, Val: {len(val_idx)}")
 
-    # Construct SAE
+    # Construct SAE (input_dim = n_tokens * token_dim, flattened)
     sae_config = SAEConfig(
-        input_dim=hidden_dim,
+        input_dim=n_tokens * token_dim,
         expansion_factor=cfg.expansion_factor,
         l1_penalty=cfg.l1_penalty,
     )

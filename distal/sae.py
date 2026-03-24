@@ -1,4 +1,4 @@
-"""Sparse Autoencoder for OOD detection on VLM prefix embeddings."""
+"""Sparse Autoencoder for OOD detection on VLM prefix token activations."""
 
 import json
 import tempfile
@@ -40,13 +40,21 @@ class SparseAutoencoder(nn.Module):
         """Encode and decode input activations.
 
         Args:
-            x: (B, input_dim) pooled embeddings.
+            x: (B, n_tokens, token_dim) or (B, input_dim).
 
         Returns:
-            (reconstruction, features) both (B, D) tensors.
+            (reconstruction, features) where reconstruction matches input shape.
         """
+        input_shape = x.shape
+        if x.ndim == 3:
+            x = x.reshape(x.shape[0], -1)
+
         features = self.activation(self.encoder(x))
         reconstruction = self.decoder(features)
+
+        if len(input_shape) == 3:
+            reconstruction = reconstruction.reshape(input_shape)
+
         return reconstruction, features
 
     def compute_loss(self, x: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
@@ -56,7 +64,13 @@ class SparseAutoencoder(nn.Module):
             (loss_tensor, {"mse": ..., "l1": ..., "loss": ...})
         """
         reconstruction, features = self.forward(x)
-        mse = F.mse_loss(reconstruction, x)
+        if x.ndim == 3:
+            x_flat = x.reshape(x.shape[0], -1)
+        else:
+            x_flat = x
+        recon_flat = reconstruction.reshape(x_flat.shape)
+
+        mse = F.mse_loss(recon_flat, x_flat)
         l1 = features.abs().mean()
         loss = mse + self.config.l1_penalty * l1
         return loss, {"mse": mse.item(), "l1": l1.item(), "loss": loss.item()}
@@ -65,13 +79,18 @@ class SparseAutoencoder(nn.Module):
         """Per-sample mean squared reconstruction error (OOD score).
 
         Args:
-            x: (B, input_dim) pooled embeddings.
+            x: (B, n_tokens, token_dim) or (B, input_dim).
 
         Returns:
             (B,) tensor of per-sample MSE values.
         """
         reconstruction, _ = self.forward(x)
-        return ((reconstruction - x) ** 2).mean(dim=-1)
+        if x.ndim == 3:
+            x_flat = x.reshape(x.shape[0], -1)
+        else:
+            x_flat = x
+        recon_flat = reconstruction.reshape(x_flat.shape)
+        return ((recon_flat - x_flat) ** 2).mean(dim=-1)
 
     def save_pretrained(self, path: str | Path) -> None:
         path = Path(path)

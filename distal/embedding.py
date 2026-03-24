@@ -47,6 +47,34 @@ def embed_prefix_pooled(
     return pooled
 
 
+@torch.no_grad()
+def embed_prefix_tokens(
+    policy: Union[PI05Policy, SmolVLAPolicy], batch: dict
+) -> torch.Tensor:
+    """Run a batch through the VLM prefix and return raw image token activations.
+
+    Supports both PI05 and SmolVLA policies. Only image tokens are returned;
+    language and state tokens are excluded.
+
+    Args:
+        batch: Already preprocessed observation dict on device.
+
+    Returns:
+        (B, n_img_tokens, hidden_dim) float tensor of image token activations.
+    """
+    if isinstance(policy, PI05Policy):
+        prefix_out, img_mask = _embed_prefix_pi05(policy, batch)
+    elif isinstance(policy, SmolVLAPolicy):
+        prefix_out, img_mask = _embed_prefix_smolvla(policy, batch)
+    else:
+        raise TypeError(f"Unsupported policy type: {type(policy)}")
+
+    # All samples share the same image token count (fixed camera setup),
+    # so use the first sample's mask to determine which positions are image tokens.
+    token_indices = torch.where(img_mask[0])[0]
+    return prefix_out[:, token_indices, :].float()
+
+
 def _embed_prefix_pi05(policy: PI05Policy, batch: dict):
     """PI05: images + language -> PaliGemma prefix forward (4D attention masks).
 

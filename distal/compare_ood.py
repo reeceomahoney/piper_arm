@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from distal.compute_maha_stats import compute_mahalanobis_np
-from distal.embedding import embed_prefix_pooled
+from distal.embedding import embed_prefix_pooled, embed_prefix_tokens
 from distal.sae import SparseAutoencoder
 
 
@@ -111,14 +111,15 @@ def main(cfg: CompareOODConfig):
         batch_device = preprocessor(batch_device)
 
         with torch.no_grad():
-            pooled = embed_prefix_pooled(policy, batch_device)
-            pooled_np = pooled.cpu().numpy()
-
             # Mahalanobis on pooled embeddings
-            maha_dists = compute_mahalanobis_np(pooled_np, gauss_mean, gauss_cov_inv)
+            pooled = embed_prefix_pooled(policy, batch_device)
+            maha_dists = compute_mahalanobis_np(
+                pooled.cpu().numpy(), gauss_mean, gauss_cov_inv
+            )
 
-            # SAE reconstruction error on same pooled embeddings
-            sae_errors = sae.reconstruction_error(pooled).cpu().numpy()
+            # SAE reconstruction error on concatenated tokens
+            tokens = embed_prefix_tokens(policy, batch_device)
+            sae_errors = sae.reconstruction_error(tokens).cpu().numpy()
 
         all_maha.extend(maha_dists.tolist())
         all_sae_error.extend(sae_errors.tolist())
