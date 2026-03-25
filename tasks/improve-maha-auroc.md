@@ -63,6 +63,18 @@ decide what to try. Report AUROC after each change so we can track what helped.
 
 ## Approaches tried
 
-Record each approach here with its AUROC result so we don't repeat work.
+Record each approach here with its AUROC result so we don't repeat work. Update the log for a result immediately after observing it and before running the next experiment.
 
 - **Baseline** (max per episode, naive cov): AUROC = 0.7579
+- **Mean aggregation** (mean per episode, naive cov): AUROC = 0.8849 (+0.127)
+- **Ledoit-Wolf covariance** (mean per episode, Ledoit-Wolf cov): AUROC = 0.8869
+  (+0.002 over mean alone — marginal; main gain was from mean aggregation)
+  Stats pushed to `reece-omahoney/maha-stats-test`. Default `maha_stats_repo_id` updated.
+- Other aggregations tested (all with naive cov): p90=0.8214, p95=0.8115,
+  mean_top10pct=0.7976, max=0.7659
+- **Temporal aggregations** (Ledoit-Wolf stats): weighting later frames more
+  heavily improves AUROC significantly — failures drift OOD toward episode end.
+  - weighted_mean (linear ramp): AUROC = 0.9266 (+0.040 over mean)
+  - mean_last50pct: AUROC = 0.9246
+  - mean_last25pct: AUROC = 0.8968
+- **PCA-256**: hurts badly AUROC = 0.7956

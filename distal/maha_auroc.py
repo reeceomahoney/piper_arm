@@ -33,7 +33,7 @@ from distal.embedding import embed_prefix_pooled
 class MahaAurocConfig:
     policy_path: str = "reece-omahoney/adv-libero-base"
     dataset_repo_id: str = "reece-omahoney/libero-10"
-    maha_stats_repo_id: str = "reece-omahoney/maha-stats"
+    maha_stats_repo_id: str = "reece-omahoney/maha-stats-test"
     num_episodes: int = 50
     device: str = "cuda"
     batch_size: int = 32
@@ -60,9 +60,12 @@ def main(cfg: MahaAurocConfig):
     stats = load_file(stats_path)
     gauss_mean = stats["mean"]
     gauss_cov_inv = stats["cov_inv"]
+    pca_mean: np.ndarray | None = stats.get("pca_mean", None)
+    pca_components: np.ndarray | None = stats.get("pca_components", None)
     print(
         f"Loaded Mahalanobis stats: mean {gauss_mean.shape}, "
         f"cov_inv {gauss_cov_inv.shape}"
+        + (f", PCA {pca_components.shape}" if pca_components is not None else "")
     )
 
     # Load dataset
@@ -113,39 +116,63 @@ def main(cfg: MahaAurocConfig):
         batch = preprocessor(batch)
         with torch.no_grad():
             emb = embed_prefix_pooled(policy, batch)
-            dists = compute_mahalanobis_np(emb.cpu().numpy(), gauss_mean, gauss_cov_inv)
+            emb_np = emb.cpu().numpy()
+            if pca_mean is not None and pca_components is not None:
+                emb_np = (emb_np - pca_mean) @ pca_components.T
+            dists = compute_mahalanobis_np(emb_np, gauss_mean, gauss_cov_inv)
         all_dists.extend(dists.tolist())
 
     distances = np.array(all_dists)
     selected_episode_index = episode_index[frame_indices]
     selected_success = success[frame_indices]
 
-    # Aggregate per episode: max distance and success label
-    ep_max_dist = {}
+    # Aggregate per episode using multiple strategies
+    ep_dists: dict[int, np.ndarray] = {}
     ep_success = {}
     for ep in selected_episodes:
         mask = selected_episode_index == ep
-        ep_max_dist[ep] = distances[mask].max()
+        ep_dists[ep] = distances[mask]
         ep_success[ep] = bool(selected_success[mask][0])
 
     episodes = sorted(selected_episodes)
-    scores = np.array([ep_max_dist[ep] for ep in episodes])
     labels = np.array([not ep_success[ep] for ep in episodes])  # failure = positive
 
-    n_fail = labels.sum()
+    n_fail = int(labels.sum())
     n_success = len(labels) - n_fail
     print(f"\nEpisodes: {len(labels)} ({n_success} success, {n_fail} failure)")
-    succ = scores[~labels]
-    fail = scores[labels]
-    print(f"Max Maha dist — success: {succ.mean():.2f} ± {succ.std():.2f}")
-    print(f"Max Maha dist — failure: {fail.mean():.2f} ± {fail.std():.2f}")
 
     if n_fail == 0 or n_success == 0:
         print("Cannot compute AUROC: only one class present.")
         return
 
-    auroc = roc_auc_score(labels, scores)
-    print(f"\nAUROC (max Maha → failure): {auroc:.4f}")
+    def mean_last_frac(d: np.ndarray, frac: float) -> float:
+        n = max(1, int(len(d) * frac))
+        return float(d[-n:].mean())
+
+    def weighted_mean(d: np.ndarray) -> float:
+        weights = np.linspace(0.0, 1.0, len(d)) + 1e-6
+        return float(np.average(d, weights=weights))
+
+    aggregations = {
+        "max": lambda d: d.max(),
+        "mean": lambda d: d.mean(),
+        "p95": lambda d: np.percentile(d, 95),
+        "p90": lambda d: np.percentile(d, 90),
+        "mean_top10pct": lambda d: np.sort(d)[int(0.9 * len(d)) :].mean(),
+        "mean_last50pct": lambda d: mean_last_frac(d, 0.5),
+        "mean_last25pct": lambda d: mean_last_frac(d, 0.25),
+        "weighted_mean": weighted_mean,
+    }
+    print()
+    for name, agg_fn in aggregations.items():
+        scores = np.array([agg_fn(ep_dists[ep]) for ep in episodes])
+        succ = scores[~labels]
+        fail = scores[labels]
+        auroc = roc_auc_score(labels, scores)
+        print(
+            f"{name:>15s}: success={succ.mean():.2f}±{succ.std():.2f}  "
+            f"failure={fail.mean():.2f}±{fail.std():.2f}  AUROC={auroc:.4f}"
+        )
 
 
 if __name__ == "__main__":

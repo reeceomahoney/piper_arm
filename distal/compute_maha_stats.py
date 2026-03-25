@@ -17,6 +17,8 @@ from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.utils import init_logging, inside_slurm
 from safetensors.numpy import save_file
+from sklearn.covariance import LedoitWolf
+from sklearn.decomposition import PCA
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -75,8 +77,13 @@ def fit_gaussian_from_dataset(
     dataset: LeRobotDataset,
     batch_size: int,
     num_workers: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Embed the full dataset and return (mean, cov_inv)."""
+    n_pca_components: int = 0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+    """Embed the full dataset and return (mean, cov_inv, pca_mean, pca_components).
+
+    If n_pca_components > 0, PCA is applied before fitting the Gaussian and
+    pca_mean / pca_components are returned for use at inference time.
+    """
     device = next(policy.parameters()).device
 
     print(f"Loading dataset: {dataset.repo_id} with {len(dataset)} frames")
@@ -102,11 +109,25 @@ def fit_gaussian_from_dataset(
     embeddings = np.concatenate(all_embeddings, axis=0)
     print(f"Embedded {embeddings.shape[0]} frames, dim={embeddings.shape[1]}")
 
-    print("Fitting Gaussian...")
-    mean: np.ndarray = embeddings.mean(axis=0)
-    cov_inv: np.ndarray = np.linalg.inv(np.cov(embeddings.T))
+    pca_mean: np.ndarray | None = None
+    pca_components: np.ndarray | None = None
+    if n_pca_components > 0:
+        print(f"Applying PCA: {embeddings.shape[1]} -> {n_pca_components} dims...")
+        pca = PCA(n_components=n_pca_components)
+        embeddings = pca.fit_transform(embeddings)
+        assert pca.mean_ is not None and pca.components_ is not None
+        pca_mean = pca.mean_.astype(np.float32)
+        pca_components = pca.components_.astype(np.float32)
+        print(f"PCA explained variance: {pca.explained_variance_ratio_.sum():.3f}")
 
-    return mean, cov_inv
+    print("Fitting Gaussian (Ledoit-Wolf covariance)...")
+    lw = LedoitWolf(assume_centered=False)
+    lw.fit(embeddings)
+    assert lw.location_ is not None and lw.precision_ is not None
+    mean: np.ndarray = lw.location_
+    cov_inv: np.ndarray = lw.precision_
+
+    return mean, cov_inv, pca_mean, pca_components
 
 
 @dataclass
@@ -118,6 +139,7 @@ class MahaStatsConfig:
     device: str = "cuda"
     batch_size: int = 32
     num_workers: int = 4
+    n_pca_components: int = 0
 
 
 @draccus.wrap()
@@ -146,18 +168,23 @@ def main(cfg: MahaStatsConfig):
     )
 
     # Compute stats
-    mean, cov_inv = fit_gaussian_from_dataset(
+    mean, cov_inv, pca_mean, pca_components = fit_gaussian_from_dataset(
         policy=policy,
         preprocessor=preprocessor,
         dataset=dataset,
         batch_size=cfg.batch_size,
         num_workers=cfg.num_workers,
+        n_pca_components=cfg.n_pca_components,
     )
 
     # Save locally
+    tensors: dict[str, np.ndarray] = {"mean": mean, "cov_inv": cov_inv}
+    if pca_mean is not None and pca_components is not None:
+        tensors["pca_mean"] = pca_mean
+        tensors["pca_components"] = pca_components
     output_path = Path(cfg.output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    save_file({"mean": mean, "cov_inv": cov_inv}, str(output_path))
+    save_file(tensors, str(output_path))
     print(f"Saved Mahalanobis stats to {output_path}")
 
     # Push to Hugging Face Hub
