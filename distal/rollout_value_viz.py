@@ -21,12 +21,13 @@ from lerobot.utils.constants import ACTION
 from lerobot.utils.utils import inside_slurm
 from tqdm import tqdm
 
+import lerobot_policy_advantage as lerobot_policy_advantage
 from distal.value_model import ValueFunction
 
 
 @dataclass
 class RolloutValueVizConfig:
-    policy_path: str = "reece-omahoney/smolvla-libero-16-chunk"
+    policy_path: str = "reece-omahoney/adv-libero-base"
     value_checkpoint: str = "reece-omahoney/value-success-expert"
     suite_name: str = "libero_10"
     task_ids: list[int] | None = None
