@@ -56,6 +56,13 @@ too slow for policy evaluation.
 
 slurm_tools has its own git repo, use that to push changes to it.
 
+**SkyPilot API server caches code.** After patching SkyPilot source in `.venv`,
+run `uv run sky api stop` before retrying — the daemon keeps old modules loaded.
+
+**When submitting PRs to external repos**, always check for a pull request
+template (`.github/pull_request_template.md`) and contributing guidelines
+(`CONTRIBUTING.md`) before creating the PR. Follow their required format.
+
 ## Architecture
 
 ### Training Pipeline
