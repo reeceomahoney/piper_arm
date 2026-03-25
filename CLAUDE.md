@@ -18,14 +18,17 @@ lock file. **Mise** as task runner.
 
 ```bash
 # Training & evaluation (all use UV + LeRobot CLI under the hood)
-mise run train              # Train policy (lerobot-train --config_path configs/advantage_train.yaml)
+mise run train              # Train base policy
+mise run adv-train          # Train advantage-conditioned policy
 mise run eval               # Evaluate policy in LIBERO sim
 
 # Hardware
 mise run record             # Record demonstrations via teleop
 mise run play               # Play trained policy on physical arm
 
-# Cluster
+# Cloud / Cluster
+mise run sky                # Launch training on cloud via SkyPilot
+mise run sky-exec           # Send command to running SkyPilot cluster
 mise run container          # Build Singularity container and upload to cluster
 uv run slurm run            # Submit SLURM job to HTC cluster (see slurm-tools package)
 
@@ -34,10 +37,11 @@ uv run slurm gui            # Start background Flask server
 uv run slurm gui stop       # Stop Flask server
 
 # Code quality
-uv run pre-commit run --all-files     # Run all pre-commit hooks (ruff --fix, ruff-format)
+uv run pre-commit run --all-files     # Run all pre-commit hooks (ruff, mdformat, ty)
 ```
 
-Ruff rules: E, F, I (errors, pyflakes, isort).
+Ruff rules: E, F, I (errors, pyflakes, isort). Pre-commit also runs mdformat
+(80-char wrap) and ty (type checking).
 
 **Never start function or variable names with underscores.** Use plain names
 without leading underscores for all functions and variables.
@@ -50,7 +54,7 @@ No formal test suite exists — testing is done manually via mise tasks.
 **Never use OSMesa for rendering.** Always use EGL (`MUJOCO_GL=egl`). OSMesa is
 too slow for policy evaluation.
 
-slurm_tools has its own git repo, use this to push changes
+slurm_tools has its own git repo, use that to push changes to it.
 
 ## Architecture
 
@@ -59,8 +63,7 @@ slurm_tools has its own git repo, use this to push changes
 The system implements a RECAP-style RL pipeline:
 
 1. **collect.py** — Roll out policy in LIBERO sim using LeRobot's
-   `eval_policy()`, create LeRobot dataset with `maha_distance`,
-   `steps_remaining`, `success` fields.
+   `eval_policy()`, create LeRobot dataset with per-episode `success` labels.
 1. **train_value.py** — Train distributional value function (SmolVLM + expert
    backbone, cross-entropy over discretized return bins).
 1. **compute_advantage_labels.py** — Pre-compute binary advantage labels using
@@ -75,10 +78,11 @@ The system implements a RECAP-style RL pipeline:
 
 LeRobot plugin that registers the "advantage" policy type:
 
-- **modeling_advantage.py** — `AdvantagePolicy`: wraps SmolVLA with learned
-  advantage embeddings and handles advantage label loading from dataset.
+- **modeling_advantage.py** — `AdvantagePolicy`: wraps SmolVLA with text-based
+  advantage conditioning ("Advantage: positive"/"negative").
 - **configuration_advantage.py** — `AdvantageConfig` dataclass for policy
   configuration.
+- **processor_advantage.py** — Delegates to SmolVLA's pre/post processors.
 
 ### Supporting Modules (`distal/`)
 
@@ -87,20 +91,22 @@ LeRobot plugin that registers the "advantage" policy type:
   trainable.
 - **embedding.py** — VLM prefix extraction for PI05/SmolVLA. Mean-pooled
   embeddings over image tokens.
-- **mahalanobis.py** — Mahalanobis distance computation and Gaussian fitting
-  (Ledoit-Wolf covariance).
-- **add_labels.py** — Add `steps_remaining` and `success` columns to LeRobot
-  datasets.
+- **compute_maha_stats.py** — Computes Mahalanobis distance statistics (mean,
+  covariance inverse) from embeddings using Ledoit-Wolf covariance.
 - **rollout_value_viz.py** — Roll out base policy in LIBERO with value estimates
   and Rerun visualization.
 - **visualize.py** — Rerun-based visualization of rollout traces synced with MP4
   videos.
 - **push_to_hub.py** — Upload trained checkpoints to HuggingFace Hub.
-- **zero.py** — Piper arm initialization/zeroing utility.
+- **trim_wandb_run.py** — Trim W&B runs by re-logging up to a given step.
+- **hardware/zero.py** — Piper arm initialization/zeroing utility.
+- **hardware/can_activate.py** — Activate and configure CAN interfaces for
+  Piper.
 
-### SLURM Tools (`slurm_tools/`)
+### SLURM Tools (external git dependency)
 
-Separate local package for cluster job management:
+Separate package (`slurm-tools`) pulled in as a git dependency. Provides cluster
+job management:
 
 - **slurm.py** — SLURM job submission via SSH (fabric). Builds sbatch scripts,
   rsyncs project to cluster, runs in Singularity containers. Also manages the
@@ -128,10 +134,13 @@ YAML configs in `configs/` drive all workflows:
   repo, advantage dropout, eval settings)
 - `slurm.yaml` — SLURM job submission settings (cluster paths, resources,
   container config)
+- `sky.yaml` — SkyPilot cloud training config (cloud provider, accelerator,
+  training task)
 - `play.yaml` / `record.yaml` — Hardware interaction settings
 
 ### Deployment
 
 Singularity container defined in `container.def` (MuJoCo EGL rendering). Targets
-L40S/H100 GPUs on HTC cluster. Uses a custom LeRobot fork
-(`reeceomahoney/lerobot@fix/rollout-return-observations-nested-dict`).
+L40S/H100 GPUs on HTC cluster. Also supports cloud training via SkyPilot (Vast,
+RunPod, etc.). Uses a custom LeRobot fork
+(`reeceomahoney/lerobot@feat/combined-fixes`).
