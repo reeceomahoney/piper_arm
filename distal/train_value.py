@@ -30,7 +30,7 @@ from distal.value_model import ValueConfig, ValueFunction
 @dataclass
 class TrainValueConfig:
     dataset_repo_id: str = "reece-omahoney/libero-10"
-    c_fail: float = 520 / 8
+    c_fail: float = 520 / 8  # ep_len / 8
     gamma: float = 1.0
     reward_type: str = "steps_remaining"  # "steps_remaining" or "maha_distance"
     stats_repo_id: str = "reece-omahoney/maha-stats"
