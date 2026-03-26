@@ -29,10 +29,11 @@ from distal.value_model import ValueFunction
 
 @dataclass
 class ComputeAdvantageLabelsConfig:
-    value_checkpoint: str = "reece-omahoney/value-success-expert"
+    value_checkpoint: str = "reece-omahoney/value-success-expert-eighth-eplen"
     pretrained_path: str = "reece-omahoney/adv-libero-base"
     dataset_repo_id: str = "reece-omahoney/libero-10"
-    c_fail: float = 1000.0
+    c_fail: float = 520 / 8
+    gamma: float = 1.0
     reward_type: str = "steps_remaining"  # "steps_remaining" or "maha_distance"
     stats_repo_id: str = "reece-omahoney/maha-stats"
     device: str = "cuda"
@@ -41,7 +42,7 @@ class ComputeAdvantageLabelsConfig:
     batch_size: int = 256
     num_workers: int = 16
     push_to_hub: bool = True
-    new_dataset_repo_id: str = "reece-omahoney/libero-10-adv-success-expert"
+    new_dataset_repo_id: str = "reece-omahoney/libero-10-adv-success-eighth-eplen"
 
 
 def compute_all_values(
@@ -87,14 +88,15 @@ def compute_nstep_advantages(
     max_episode_length: int,
     n_step: int,
     c_fail: float,
+    gamma: float,
 ) -> np.ndarray:
     """Compute n-step TD advantages for all samples.
 
-    A(t) = sum_{k=0}^{N-1} r_{t+k} + V(t+N) - V(t)
+    A(t) = sum_{k=0}^{N-1} gamma^k * r_{t+k} + gamma^N * V(t+N) - V(t)
 
     Per-step reward is -1/max_episode_length. When the n-step window extends
-    past the episode end (steps_remaining < n_step), falls back to the MC
-    return G(t) - V(t).
+    past the episode end (steps_remaining < n_step), falls back to the
+    discounted MC return G(t) - V(t).
 
     Args:
         values: (N,) predicted values for each frame.
@@ -104,6 +106,7 @@ def compute_nstep_advantages(
         max_episode_length: max steps in any episode.
         n_step: number of lookahead steps N.
         c_fail: failure penalty for MC fallback.
+        gamma: discount factor in (0, 1].
 
     Returns:
         (N,) float array of advantages.
@@ -111,6 +114,15 @@ def compute_nstep_advantages(
     num_frames = len(values)
     advantages = np.zeros(num_frames, dtype=np.float64)
     step_reward = -1.0 / max_episode_length
+
+    # Normalize MC returns the same way as train_value.py
+    if gamma == 1.0:
+        mc_norm = max_episode_length
+    else:
+        mc_norm = abs(
+            -(1 - gamma**max_episode_length) / (1 - gamma)
+            - c_fail * gamma**max_episode_length
+        )
 
     for i in range(num_frames):
         sr = int(steps_remaining[i])
@@ -123,16 +135,28 @@ def compute_nstep_advantages(
         )
 
         if in_episode:
-            # N-step: A = sum of N step rewards + V(t+N) - V(t)
-            n_step_return = n_step * step_reward + values[target]
+            # N-step: A = sum_{k=0}^{N-1} gamma^k * r + gamma^N * V(t+N) - V(t)
+            if gamma == 1.0:
+                discounted_rewards = n_step * step_reward
+            else:
+                discounted_rewards = step_reward * (1 - gamma**n_step) / (1 - gamma)
+            n_step_return = discounted_rewards + (gamma**n_step) * values[target]
             advantages[i] = n_step_return - values[i]
         else:
-            # Near episode end: fall back to MC return
+            # Near episode end: fall back to discounted MC return
             succ = bool(success[i])
-            if succ:
-                mc_return = -sr / max_episode_length
+            if gamma == 1.0:
+                if succ:
+                    mc_return = -sr / max_episode_length
+                else:
+                    mc_return = max((-sr - c_fail + 1) / max_episode_length, -1.0)
             else:
-                mc_return = max((-sr - c_fail + 1) / max_episode_length, -1.0)
+                discounted_steps = -(1 - gamma**sr) / (1 - gamma)
+                if succ:
+                    mc_return = discounted_steps / mc_norm
+                else:
+                    mc_return = (discounted_steps - c_fail * gamma**sr) / mc_norm
+                mc_return = max(mc_return, -1.0)
             advantages[i] = mc_return - values[i]
 
     return advantages
@@ -144,16 +168,17 @@ def compute_nstep_advantages_maha(
     maha_norm: float,
     episode_index: np.ndarray,
     n_step: int,
+    gamma: float,
 ) -> np.ndarray:
     """Compute n-step TD advantages using negative Mahalanobis distance rewards.
 
     Per-step reward: r_t = -maha_distance[t] / maha_norm
 
     N-step (when window stays in episode):
-        A(t) = sum_{k=0}^{N-1} r_{t+k} + V(t+N) - V(t)
+        A(t) = sum_{k=0}^{N-1} gamma^k * r_{t+k} + gamma^N * V(t+N) - V(t)
 
     MC fallback (near episode end):
-        A(t) = sum_{k=t}^{T-1} r_k - V(t)
+        A(t) = sum_{k=0}^{T-t-1} gamma^k * r_{t+k} - V(t)
 
     No c_fail penalty — high maha distances naturally produce lower returns.
 
@@ -163,6 +188,7 @@ def compute_nstep_advantages_maha(
         maha_norm: normalization constant (from value training checkpoint).
         episode_index: (N,) episode index per frame.
         n_step: number of lookahead steps N.
+        gamma: discount factor in (0, 1].
 
     Returns:
         (N,) float array of advantages.
@@ -177,14 +203,19 @@ def compute_nstep_advantages_maha(
         in_episode = target < num_frames and int(episode_index[target]) == ep
 
         if in_episode:
-            n_step_reward_sum = rewards[i:target].sum()
-            advantages[i] = n_step_reward_sum + values[target] - values[i]
+            discounts = gamma ** np.arange(n_step)
+            n_step_reward_sum = (discounts * rewards[i:target]).sum()
+            advantages[i] = (
+                n_step_reward_sum + (gamma**n_step) * values[target] - values[i]
+            )
         else:
-            # MC fallback: sum remaining rewards in this episode
+            # MC fallback: discounted sum of remaining rewards in this episode
             j = i
             while j < num_frames and int(episode_index[j]) == ep:
                 j += 1
-            mc_return = rewards[i:j].sum()
+            remaining = j - i
+            discounts = gamma ** np.arange(remaining)
+            mc_return = (discounts * rewards[i:j]).sum()
             advantages[i] = mc_return - values[i]
 
     return advantages
@@ -324,6 +355,7 @@ def main(cfg: ComputeAdvantageLabelsConfig):
             maha_norm,
             episode_index,
             cfg.n_step,
+            cfg.gamma,
         )
     else:
         advantages = compute_nstep_advantages(
@@ -334,6 +366,7 @@ def main(cfg: ComputeAdvantageLabelsConfig):
             max_episode_length,
             cfg.n_step,
             cfg.c_fail,
+            cfg.gamma,
         )
 
     # Compute per-task thresholds and binarize

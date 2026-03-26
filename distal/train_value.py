@@ -31,6 +31,7 @@ from distal.value_model import ValueConfig, ValueFunction
 class TrainValueConfig:
     dataset_repo_id: str = "reece-omahoney/libero-10"
     c_fail: float = 1000.0
+    gamma: float = 1.0
     reward_type: str = "maha_distance"  # "steps_remaining" or "maha_distance"
     stats_repo_id: str = "reece-omahoney/maha-stats"
     base_policy: str = "reece-omahoney/adv-libero-base"
@@ -59,17 +60,20 @@ def compute_returns(
     success: torch.Tensor,
     max_episode_length: int,
     c_fail: float,
+    gamma: float,
 ) -> torch.Tensor:
     """Compute ground-truth returns from episode metadata.
 
-    Successful: G_t = -steps_remaining / max_episode_length
-    Failed:     G_t = (-steps_remaining - c_fail + 1) / max_len, clipped to -1
+    When gamma < 1, returns are the discounted sum of per-step rewards (-1)
+    plus a terminal penalty for failures. When gamma == 1, this reduces to
+    the original linear formulation.
 
     Args:
         steps_remaining: (B,) or (B, 1) int tensor.
         success: (B,) or (B, 1) bool tensor.
         max_episode_length: max steps in any episode.
         c_fail: failure penalty.
+        gamma: discount factor in (0, 1].
 
     Returns:
         (B,) float tensor with returns in [-1, 0].
@@ -77,26 +81,44 @@ def compute_returns(
     steps = steps_remaining.float().squeeze(-1)
     succ = success.squeeze(-1)
 
-    returns = torch.where(
-        succ,
-        -steps / max_episode_length,
-        (-steps - c_fail + 1) / max_episode_length,
-    )
+    if gamma == 1.0:
+        returns = torch.where(
+            succ,
+            -steps / max_episode_length,
+            (-steps - c_fail + 1) / max_episode_length,
+        )
+    else:
+        # Discounted sum of per-step reward (-1): sum_{k=0}^{T-1} gamma^k * (-1)
+        # = -(1 - gamma^T) / (1 - gamma)
+        discounted_steps = -(1 - gamma**steps) / (1 - gamma)
+        fail_penalty = -c_fail * gamma**steps
+        undiscounted_return = torch.where(
+            succ, discounted_steps, discounted_steps + fail_penalty
+        )
+        # Normalize to [-1, 0] using the worst-case return (max steps + fail penalty)
+        max_return = (
+            -(1 - gamma**max_episode_length) / (1 - gamma)
+            - c_fail * gamma**max_episode_length
+        )
+        returns = undiscounted_return / abs(max_return)
+
     return returns.clamp(-1.0, 0.0)
 
 
 def precompute_maha_returns(
     maha: np.ndarray,
     episode_index: np.ndarray,
+    gamma: float,
 ) -> tuple[np.ndarray, float]:
     """Pre-compute per-frame returns using negative Mahalanobis distance as reward.
 
-    For each episode, G_t = sum_{k=t}^{T-1} -maha[k]. Returns are normalized
-    to [-1, 0] by dividing by the max absolute return across all frames.
+    For each episode, G_t = sum_{k=0}^{T-t-1} gamma^k * -maha[t+k]. Returns are
+    normalized to [-1, 0] by dividing by the max absolute return across all frames.
 
     Args:
         maha: (N,) float64 array of per-frame Mahalanobis distances.
         episode_index: (N,) int array of episode indices.
+        gamma: discount factor in (0, 1].
 
     Returns:
         (returns, norm_constant) where *returns* is a ``(num_frames,)`` float64
@@ -107,20 +129,19 @@ def precompute_maha_returns(
     num_frames = len(maha)
     returns = np.zeros(num_frames, dtype=np.float64)
 
-    # Reverse cumulative sum of -maha within each episode
+    # Reverse pass computing discounted returns within each episode
     i = num_frames - 1
     while i >= 0:
         ep = episode_index[i]
-        cumsum = 0.0
+        # Find episode start
         j = i
-        # Find all frames in this episode (they are contiguous)
         while j >= 0 and episode_index[j] == ep:
             j -= 1
         ep_start = j + 1
-        # Forward pass computing reverse cumsum
+        # Backward pass: G_t = -maha[t] + gamma * G_{t+1}
         cumsum = 0.0
         for k in range(i, ep_start - 1, -1):
-            cumsum += -maha[k]
+            cumsum = -maha[k] + gamma * cumsum
             returns[k] = cumsum
         i = ep_start - 1
 
@@ -249,7 +270,9 @@ def main(cfg: TrainValueConfig):
             cfg.batch_size,
             cfg.num_workers,
         )
-        maha_returns_arr, maha_norm = precompute_maha_returns(maha_arr, episode_index)
+        maha_returns_arr, maha_norm = precompute_maha_returns(
+            maha_arr, episode_index, cfg.gamma
+        )
         maha_returns_tensor = torch.tensor(
             maha_returns_arr, dtype=torch.float32, device=device
         )
@@ -283,6 +306,7 @@ def main(cfg: TrainValueConfig):
                 success.to(device),
                 max_episode_length,
                 cfg.c_fail,
+                cfg.gamma,
             )
 
         batch["returns"] = returns
