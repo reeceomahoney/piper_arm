@@ -50,6 +50,7 @@ class ValueConfig(PreTrainedConfig):
     self_attn_every_n_layers: int = 2
     freeze_vision_encoder: bool = True
     train_expert_only: bool = True
+    hl_gauss_sigma: float = 0.0
 
     # Training presets
     optimizer_lr: float = 1e-4
@@ -355,13 +356,22 @@ class ValueFunction(PreTrainedPolicy):
         """Training forward pass: compute cross-entropy loss over value bins.
 
         Expects batch to contain a "returns" key with (B,) float tensor in [-1, 0].
+        When hl_gauss_sigma > 0, uses soft Gaussian targets (HL-Gauss) instead of
+        one-hot targets.
 
         Returns:
             (loss, {"mae": float})
         """
         logits = self.compute_logits(batch)
         returns = batch["returns"]
-        targets = self.returns_to_bins(returns, self.config.n_bins)
+
+        if self.config.hl_gauss_sigma > 0:
+            targets = self.returns_to_hl_gauss(
+                returns, self.config.n_bins, self.config.hl_gauss_sigma
+            )
+        else:
+            targets = self.returns_to_bins(returns, self.config.n_bins)
+
         loss = F.cross_entropy(logits, targets)
 
         with torch.no_grad():
@@ -404,6 +414,27 @@ class ValueFunction(PreTrainedPolicy):
         bin_indices = ((returns + 1.0) * (n_bins - 1)).long()
         bin_indices = bin_indices.clamp(0, n_bins - 1)
         return F.one_hot(bin_indices, num_classes=n_bins).float()
+
+    def returns_to_hl_gauss(self, returns: Tensor, n_bins: int, sigma: float) -> Tensor:
+        """Convert returns to soft Gaussian targets over bins (HL-Gauss).
+
+        Places a Gaussian centered on the return value and evaluates it at each
+        bin center, then normalizes to a valid distribution.
+
+        Args:
+            returns: (B,) float tensor of return values in [-1, 0].
+            n_bins: number of discrete bins.
+            sigma: standard deviation of the Gaussian kernel.
+
+        Returns:
+            Soft targets: (B, n_bins) summing to 1 per row.
+        """
+        returns = returns.clamp(-1.0, 0.0)
+        bin_centers = cast(Tensor, self.bin_centers)  # (n_bins,)
+        # (B, 1) - (1, n_bins) → (B, n_bins)
+        diff = returns.unsqueeze(-1) - bin_centers.unsqueeze(0)
+        log_probs = -0.5 * (diff / sigma) ** 2
+        return F.softmax(log_probs, dim=-1)
 
     def select_action(self, batch: dict[str, Tensor], **kwargs) -> Tensor:
         raise NotImplementedError("ValueFunction does not produce actions.")
