@@ -30,14 +30,14 @@ from distal.value_model import ValueConfig, ValueFunction
 @dataclass
 class TrainValueConfig:
     dataset_repo_id: str = "reece-omahoney/libero-10"
-    c_fail: float = 1000.0
+    c_fail: float = 520 / 8
     gamma: float = 1.0
-    reward_type: str = "maha_distance"  # "steps_remaining" or "maha_distance"
+    reward_type: str = "steps_remaining"  # "steps_remaining" or "maha_distance"
     stats_repo_id: str = "reece-omahoney/maha-stats"
     base_policy: str = "reece-omahoney/adv-libero-base"
 
     value: ValueConfig = field(default_factory=ValueConfig)
-    value_repo_id: str = "reece-omahoney/value-maha-expert"
+    value_repo_id: str = "reece-omahoney/value-success-eighth-eplen"
     push_to_hub: bool = True
 
     # Training
