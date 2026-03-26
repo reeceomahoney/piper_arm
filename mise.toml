@@ -12,7 +12,7 @@ description = "Train advantage policy"
 run = """
 lerobot-train --config_path configs/advantage_train.yaml \
   --policy.path=reece-omahoney/adv-libero-base \
-  --policy.repo_id=reece-omahoney/adv-libero-success-expert \
+  --policy.repo_id=reece-omahoney/adv-libero-success-eighth-eplen \
   --policy.fixed_advantage=false \
   --policy.advantage_dropout=0.3
 """
@@ -34,12 +34,14 @@ run = "lerobot-record --config_path configs/play.yaml --policy.path=reece-omahon
 # Cluster
 
 [tasks.sky]
-description = "Launch training on vast.ai via SkyPilot"
-run = "sky launch configs/sky.yaml -y --env HF_TOKEN --env WANDB_API_KEY"
-
-[tasks.sky-exec]
-description = "Send command to running SkyPilot cluster"
-run = "sky exec {{arg(i=0, name='cluster_id')}} configs/sky.yaml --env HF_TOKEN --env WANDB_API_KEY"
+description = "Launch training on vast.ai via SkyPilot, or exec on a running cluster if given a cluster ID"
+run = """
+if [ -n "{{arg(i=0, name='cluster_id', default='')}}" ]; then
+  sky exec {{arg(i=0, name='cluster_id', default='')}} configs/sky.yaml --env HF_TOKEN --env WANDB_API_KEY
+else
+  sky launch configs/sky.yaml -y --env HF_TOKEN --env WANDB_API_KEY
+fi
+"""
 
 [tasks.container]
 description = "Build Singularity container and upload to cluster"
