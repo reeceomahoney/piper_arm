@@ -35,12 +35,13 @@ run = "lerobot-record --config_path configs/play.yaml --policy.path=reece-omahon
 
 [tasks.sky]
 description = "Launch training on vast.ai via SkyPilot, or exec on a running cluster if given a cluster ID"
+usage = 'arg "[cluster_id]"'
 run = """
-if [ -n "{{arg(i=0, name='cluster_id', default='')}}" ]; then
-  sky exec {{arg(i=0, name='cluster_id', default='')}} configs/sky.yaml --env HF_TOKEN --env WANDB_API_KEY
-else
-  sky launch configs/sky.yaml -y --env HF_TOKEN --env WANDB_API_KEY
-fi
+{% if usage.cluster_id %}
+sky exec {{ usage.cluster_id }} configs/sky.yaml --env HF_TOKEN --env WANDB_API_KEY
+{% else %}
+sky launch configs/sky.yaml -y --env HF_TOKEN --env WANDB_API_KEY
+{% endif %}
 """
 
 [tasks.container]
