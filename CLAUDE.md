@@ -151,3 +151,19 @@ Singularity container defined in `container.def` (MuJoCo EGL rendering). Targets
 L40S/H100 GPUs on HTC cluster. Also supports cloud training via SkyPilot (Vast,
 RunPod, etc.). Uses a custom LeRobot fork
 (`reeceomahoney/lerobot@feat/combined-fixes`).
+
+## Known VM Issues
+
+EGL initialization can fail on some RunPod nodes with:
+
+```
+libEGL warning: failed to open /dev/dri/renderD132: Permission denied
+ImportError: Cannot initialize a EGL device display.
+```
+
+Root cause: RunPod VMs run inside Docker containers where `/dev/dri/` devices
+are bind-mounted from the host. On correctly configured nodes, the devices have
+ACLs (`crw-rw----+`) granting container access. On misconfigured nodes, the
+devices are owned by `nobody:nogroup` with no ACL, and `chmod` is blocked on
+bind-mounted devices — so even root cannot fix permissions from inside the
+container. The fix is to tear down and relaunch to get a different node.
