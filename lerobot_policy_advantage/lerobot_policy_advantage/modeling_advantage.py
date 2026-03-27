@@ -32,6 +32,7 @@ class AdvantageVLAFlowMatching(VLAFlowMatching):
 
     def __init__(self, config: AdvantageConfig, **kwargs):
         super().__init__(config, **kwargs)
+        self.config: AdvantageConfig = config
         self.advantage_dropout = config.advantage_dropout
 
         tokenizer = AutoTokenizer.from_pretrained(config.vlm_model_name)
@@ -140,12 +141,27 @@ class AdvantageVLAFlowMatching(VLAFlowMatching):
         losses = torch.nn.functional.mse_loss(u_t, v_t, reduction="none")
         return losses
 
+    def _build_prefix_kv_cache(self, prefix_embs, prefix_pad_masks, prefix_att_masks):
+        """Build KV cache from prefix embeddings."""
+        att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+        position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+        _, past_key_values = self.vlm_with_expert.forward(
+            attention_mask=att_2d_masks,
+            position_ids=cast(torch.LongTensor, position_ids),
+            past_key_values=None,
+            inputs_embeds=cast(list[torch.FloatTensor], [prefix_embs, None]),
+            use_cache=self.config.use_cache,
+            fill_kv_cache=True,
+        )
+        return past_key_values
+
     def sample_actions(
         self, images, img_masks, lang_tokens, lang_masks, state, noise=None, **kwargs
     ) -> Tensor:
-        """Inference with positive advantage tokens always injected."""
+        """Inference with classifier-free guidance over advantage conditioning."""
         bsize = state.shape[0]
         device = state.device
+        guidance_scale = self.config.guidance_scale
 
         if noise is None:
             actions_shape = (bsize, self.config.chunk_size, self.config.max_action_dim)
@@ -155,26 +171,23 @@ class AdvantageVLAFlowMatching(VLAFlowMatching):
             images, img_masks, lang_tokens, lang_masks, state=state
         )
 
-        # Always inject positive advantage at inference (index 1 = positive)
+        # Conditional prefix: append positive advantage tokens
         pos_tokens = self.adv_tokens[1].unsqueeze(0).expand(bsize, -1)
         adv_embs, adv_pad_masks, adv_att_masks = self.embed_advantage(pos_tokens)
 
-        # Append advantage as the last tokens in the prefix
-        prefix_embs = torch.cat([prefix_embs, adv_embs], dim=1)
-        prefix_pad_masks = torch.cat([prefix_pad_masks, adv_pad_masks], dim=1)
-        prefix_att_masks = torch.cat([prefix_att_masks, adv_att_masks], dim=1)
+        cond_embs = torch.cat([prefix_embs, adv_embs], dim=1)
+        cond_pad = torch.cat([prefix_pad_masks, adv_pad_masks], dim=1)
+        cond_att = torch.cat([prefix_att_masks, adv_att_masks], dim=1)
 
-        # KV cache forward
-        prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
-        prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
-        _, past_key_values = self.vlm_with_expert.forward(
-            attention_mask=prefix_att_2d_masks,
-            position_ids=cast(torch.LongTensor, prefix_position_ids),
-            past_key_values=None,
-            inputs_embeds=cast(list[torch.FloatTensor], [prefix_embs, None]),
-            use_cache=self.config.use_cache,
-            fill_kv_cache=True,
-        )
+        cond_kv = self._build_prefix_kv_cache(cond_embs, cond_pad, cond_att)
+
+        # Unconditional prefix: append zeroed-out advantage embeddings
+        if guidance_scale != 1.0:
+            uncond_adv_embs = torch.zeros_like(adv_embs)
+            uncond_embs = torch.cat([prefix_embs, uncond_adv_embs], dim=1)
+            uncond_pad = cond_pad
+            uncond_att = cond_att
+            uncond_kv = self._build_prefix_kv_cache(uncond_embs, uncond_pad, uncond_att)
 
         # Denoising loop
         num_steps = self.config.num_steps
@@ -185,12 +198,25 @@ class AdvantageVLAFlowMatching(VLAFlowMatching):
             time_tensor = torch.tensor(time, dtype=torch.float32, device=device).expand(
                 bsize
             )
-            v_t = self.denoise_step(
+
+            v_cond = self.denoise_step(
                 x_t=x_t,
-                prefix_pad_masks=prefix_pad_masks,
-                past_key_values=past_key_values,
+                prefix_pad_masks=cond_pad,
+                past_key_values=cond_kv,
                 timestep=time_tensor,
             )
+
+            if guidance_scale == 1.0:
+                v_t = v_cond
+            else:
+                v_uncond = self.denoise_step(
+                    x_t=x_t,
+                    prefix_pad_masks=uncond_pad,
+                    past_key_values=uncond_kv,
+                    timestep=time_tensor,
+                )
+                v_t = v_uncond + guidance_scale * (v_cond - v_uncond)
+
             x_t = x_t + dt * v_t
 
         return x_t
