@@ -297,8 +297,15 @@ def compute_nstep_advantages(
     n_step: int,
     gamma: float,
 ) -> np.ndarray:
-    """Compute n-step TD advantages with MC fallback near episode end."""
+    """Compute n-step TD advantages with MC fallback near episode end.
+
+    When n_step=0, uses pure MC advantages: A(s_t) = G_t - V(s_t).
+    """
     num_frames = len(values)
+
+    if n_step == 0:
+        return returns - values
+
     advantages = np.zeros(num_frames, dtype=np.float64)
 
     discounts = gamma ** np.arange(n_step)
