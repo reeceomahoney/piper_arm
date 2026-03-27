@@ -5,9 +5,8 @@ per-sample advantages using per-task percentile thresholds. Adds an
 `observation.language.advantage_label` column with integer labels (0 or 1)
 to the dataset's parquet files.
 
-N-step advantage: A(t) = sum_{k=0}^{N-1} r_{t+k} + V(t+N) - V(t)
-where r = -1/max_ep_len per step. Falls back to MC return when the n-step
-window extends past the episode boundary.
+N-step advantage uses shared reward helpers and falls back to normalized MC
+returns when the n-step window extends past the episode boundary.
 """
 
 import json
@@ -24,6 +23,10 @@ from lerobot.policies.factory import make_pre_post_processors
 from torch.utils.data import DataLoader
 
 import lerobot_policy_advantage as lerobot_policy_advantage
+from distal.rewards import (
+    compute_nstep_advantages,
+    load_reward_context,
+)
 from distal.value_model import ValueFunction
 
 
@@ -32,10 +35,6 @@ class ComputeAdvantageLabelsConfig:
     value_checkpoint: str = "reece-omahoney/value-success-expert-eighth-eplen"
     pretrained_path: str = "reece-omahoney/adv-libero-base"
     dataset_repo_id: str = "reece-omahoney/libero-10"
-    c_fail: float = 520 / 8
-    gamma: float = 1.0
-    reward_type: str = "steps_remaining"  # "steps_remaining" or "maha_distance"
-    stats_repo_id: str = "reece-omahoney/maha-stats"
     device: str = "cuda"
     n_step: int = 10
     advantage_percentile: float = 0.7
@@ -80,147 +79,6 @@ def compute_all_values(
     return np.array(all_values, dtype=np.float64)
 
 
-def compute_nstep_advantages(
-    values: np.ndarray,
-    steps_remaining: np.ndarray,
-    success: np.ndarray,
-    episode_index: np.ndarray,
-    max_episode_length: int,
-    n_step: int,
-    c_fail: float,
-    gamma: float,
-) -> np.ndarray:
-    """Compute n-step TD advantages for all samples.
-
-    A(t) = sum_{k=0}^{N-1} gamma^k * r_{t+k} + gamma^N * V(t+N) - V(t)
-
-    Per-step reward is -1/max_episode_length. When the n-step window extends
-    past the episode end (steps_remaining < n_step), falls back to the
-    discounted MC return G(t) - V(t).
-
-    Args:
-        values: (N,) predicted values for each frame.
-        steps_remaining: (N,) steps remaining per frame.
-        success: (N,) bool success per frame.
-        episode_index: (N,) episode index per frame.
-        max_episode_length: max steps in any episode.
-        n_step: number of lookahead steps N.
-        c_fail: failure penalty for MC fallback.
-        gamma: discount factor in (0, 1].
-
-    Returns:
-        (N,) float array of advantages.
-    """
-    num_frames = len(values)
-    advantages = np.zeros(num_frames, dtype=np.float64)
-    step_reward = -1.0 / max_episode_length
-
-    # Normalize MC returns the same way as train_value.py
-    if gamma == 1.0:
-        mc_norm = max_episode_length
-    else:
-        mc_norm = abs(
-            -(1 - gamma**max_episode_length) / (1 - gamma)
-            - c_fail * gamma**max_episode_length
-        )
-
-    for i in range(num_frames):
-        sr = int(steps_remaining[i])
-        ep = int(episode_index[i])
-
-        # Check that i + n_step lands in the same episode
-        target = i + n_step
-        in_episode = (
-            sr >= n_step and target < num_frames and int(episode_index[target]) == ep
-        )
-
-        if in_episode:
-            # N-step: A = sum_{k=0}^{N-1} gamma^k * r + gamma^N * V(t+N) - V(t)
-            if gamma == 1.0:
-                discounted_rewards = n_step * step_reward
-            else:
-                discounted_rewards = step_reward * (1 - gamma**n_step) / (1 - gamma)
-            n_step_return = discounted_rewards + (gamma**n_step) * values[target]
-            advantages[i] = n_step_return - values[i]
-        else:
-            # Near episode end: fall back to discounted MC return
-            succ = bool(success[i])
-            if gamma == 1.0:
-                if succ:
-                    mc_return = -sr / max_episode_length
-                else:
-                    mc_return = max((-sr - c_fail + 1) / max_episode_length, -1.0)
-            else:
-                discounted_steps = -(1 - gamma**sr) / (1 - gamma)
-                if succ:
-                    mc_return = discounted_steps / mc_norm
-                else:
-                    mc_return = (discounted_steps - c_fail * gamma**sr) / mc_norm
-                mc_return = max(mc_return, -1.0)
-            advantages[i] = mc_return - values[i]
-
-    return advantages
-
-
-def compute_nstep_advantages_maha(
-    values: np.ndarray,
-    maha_distance: np.ndarray,
-    maha_norm: float,
-    episode_index: np.ndarray,
-    n_step: int,
-    gamma: float,
-) -> np.ndarray:
-    """Compute n-step TD advantages using negative Mahalanobis distance rewards.
-
-    Per-step reward: r_t = -maha_distance[t] / maha_norm
-
-    N-step (when window stays in episode):
-        A(t) = sum_{k=0}^{N-1} gamma^k * r_{t+k} + gamma^N * V(t+N) - V(t)
-
-    MC fallback (near episode end):
-        A(t) = sum_{k=0}^{T-t-1} gamma^k * r_{t+k} - V(t)
-
-    No c_fail penalty — high maha distances naturally produce lower returns.
-
-    Args:
-        values: (N,) predicted values for each frame.
-        maha_distance: (N,) Mahalanobis distance per frame.
-        maha_norm: normalization constant (from value training checkpoint).
-        episode_index: (N,) episode index per frame.
-        n_step: number of lookahead steps N.
-        gamma: discount factor in (0, 1].
-
-    Returns:
-        (N,) float array of advantages.
-    """
-    num_frames = len(values)
-    advantages = np.zeros(num_frames, dtype=np.float64)
-    rewards = -maha_distance.astype(np.float64) / maha_norm
-
-    for i in range(num_frames):
-        ep = int(episode_index[i])
-        target = i + n_step
-        in_episode = target < num_frames and int(episode_index[target]) == ep
-
-        if in_episode:
-            discounts = gamma ** np.arange(n_step)
-            n_step_reward_sum = (discounts * rewards[i:target]).sum()
-            advantages[i] = (
-                n_step_reward_sum + (gamma**n_step) * values[target] - values[i]
-            )
-        else:
-            # MC fallback: discounted sum of remaining rewards in this episode
-            j = i
-            while j < num_frames and int(episode_index[j]) == ep:
-                j += 1
-            remaining = j - i
-            discounts = gamma ** np.arange(remaining)
-            mc_return = (discounts * rewards[i:j]).sum()
-            advantages[i] = mc_return - values[i]
-
-    return advantages
-
-
 def compute_thresholds_from_advantages(
     advantages: np.ndarray,
     tasks: list[str],
@@ -262,15 +120,10 @@ def main(cfg: ComputeAdvantageLabelsConfig):
 
     dataset = LeRobotDataset(cfg.dataset_repo_id)
 
-    frame_index = np.array([s.item() for s in dataset.hf_dataset["frame_index"]])
     episode_index_all = np.array(
         [s.item() for s in dataset.hf_dataset["episode_index"]]
     )
     ep_lengths = Counter(episode_index_all.tolist())
-    steps_remaining = np.array(
-        [ep_lengths[ep] - fi - 1 for ep, fi in zip(episode_index_all, frame_index)],
-        dtype=np.int32,
-    )
     max_episode_length = max(ep_lengths.values())
     print(f"Dataset: {dataset.num_episodes} episodes, {dataset.num_frames} frames")
     print(f"Max episode length: {max_episode_length}")
@@ -294,10 +147,6 @@ def main(cfg: ComputeAdvantageLabelsConfig):
         num_workers=cfg.num_workers,
     )
 
-    # Extract episode metadata as arrays
-    success = np.array([s.item() for s in dataset.hf_dataset["success"]])
-    episode_index = episode_index_all
-
     # Get per-frame task strings
     task_index = np.array([s.item() for s in dataset.hf_dataset["task_index"]])
     task_map = {v: k for k, v in dataset.meta.tasks["task_index"].items()}
@@ -305,69 +154,24 @@ def main(cfg: ComputeAdvantageLabelsConfig):
 
     # Compute n-step advantages
     print(f"Computing {cfg.n_step}-step advantages...")
-    if cfg.reward_type == "maha_distance":
-        from pathlib import Path
+    reward_context = load_reward_context(
+        cfg.value_checkpoint,
+        dataset=dataset,
+    )
 
-        from huggingface_hub import hf_hub_download
-        from lerobot.policies.factory import make_policy
-        from lerobot.policies.pi05.modeling_pi05 import PI05Policy
-        from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
-        from safetensors.numpy import load_file
-
-        from distal.compute_maha_stats import compute_maha_distances
-
-        stats_file = hf_hub_download(
-            cfg.stats_repo_id, "stats.safetensors", repo_type="dataset"
-        )
-        data = load_file(stats_file)
-        gauss_mean = data["mean"]
-        gauss_cov_inv = data["cov_inv"]
-        print(
-            f"Loaded Gaussian stats from {cfg.stats_repo_id}, dim={gauss_mean.shape[0]}"
-        )
-
-        print("Loading policy for Mahalanobis distance computation...")
-        policy_cfg = PreTrainedConfig.from_pretrained(cfg.pretrained_path)
-        policy_cfg.pretrained_path = Path(cfg.pretrained_path)
-        policy_cfg.device = cfg.device
-        policy = make_policy(cfg=policy_cfg, ds_meta=dataset.meta)
-        assert isinstance(policy, (PI05Policy, SmolVLAPolicy))
-        policy.eval()
-        policy_preprocessor, _ = make_pre_post_processors(
-            policy_cfg=policy_cfg, pretrained_path=str(policy_cfg.pretrained_path)
-        )
-
-        maha_distance = compute_maha_distances(
-            policy,
-            policy_preprocessor,
-            dataset,
-            gauss_mean,
-            gauss_cov_inv,
-            cfg.batch_size,
-            cfg.num_workers,
-        )
-
-        maha_norm = value_model.get_buffer("maha_norm").item()
-        print(f"Loaded maha_norm={maha_norm:.4f} from value model")
-        advantages = compute_nstep_advantages_maha(
-            values,
-            maha_distance,
-            maha_norm,
-            episode_index,
-            cfg.n_step,
-            cfg.gamma,
-        )
-    else:
-        advantages = compute_nstep_advantages(
-            values,
-            steps_remaining,
-            success,
-            episode_index,
-            max_episode_length,
-            cfg.n_step,
-            cfg.c_fail,
-            cfg.gamma,
-        )
+    print("Loaded reward_context.safetensors from checkpoint")
+    print(f"Reward type: {reward_context.reward_type}")
+    print(f"Reward gamma: {reward_context.gamma:.4f}")
+    print(f"Reward norm constant: {reward_context.normalization_constant:.4f}")
+    print(f"Failure penalty: {reward_context.failure_penalty:.4f}")
+    advantages = compute_nstep_advantages(
+        values,
+        reward_context.rewards,
+        reward_context.returns,
+        episode_index_all,
+        cfg.n_step,
+        reward_context.gamma,
+    )
 
     # Compute per-task thresholds and binarize
     print("Computing per-task advantage thresholds...")

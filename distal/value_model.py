@@ -140,9 +140,6 @@ class ValueFunction(PreTrainedPolicy):
         # Bin centers for computing expected value
         self.register_buffer("bin_centers", torch.linspace(-1.0, 0.0, config.n_bins))
 
-        # Optional normalization constant for Mahalanobis distance rewards
-        self.register_buffer("maha_norm", torch.tensor(0.0))
-
         # Special tokens for image wrapping
         self.fake_image_token = (
             self.vlm_with_expert.processor.tokenizer.fake_image_token_id

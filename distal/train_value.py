@@ -1,7 +1,7 @@
 """Train a distributional value function from rollout datasets.
 
 Uses cross-entropy loss over discretized return bins (RECAP-style).
-Ground truth returns are computed analytically from steps_remaining + success.
+Ground truth returns are computed from shared reward helpers.
 """
 
 import random
@@ -24,15 +24,16 @@ from lerobot_policy_advantage.processor_advantage import (
 )
 from torch.utils.data import DataLoader
 
+from distal.rewards import build_reward_context, save_reward_context
 from distal.value_model import ValueConfig, ValueFunction
 
 
 @dataclass
 class TrainValueConfig:
     dataset_repo_id: str = "reece-omahoney/libero-10"
-    c_fail: float = 520 / 8  # ep_len / 8
     gamma: float = 1.0
-    reward_type: str = "steps_remaining"  # "steps_remaining" or "maha_distance"
+    reward_type: str = "steps"  # "steps" or "maha"
+    failure_penalty_scale: float = 0.125
     stats_repo_id: str = "reece-omahoney/maha-stats"
     base_policy: str = "reece-omahoney/adv-libero-base"
 
@@ -53,104 +54,6 @@ class TrainValueConfig:
     num_workers: int = 4
     seed: int = 42
     use_amp: bool = True
-
-
-def compute_returns(
-    steps_remaining: torch.Tensor,
-    success: torch.Tensor,
-    max_episode_length: int,
-    c_fail: float,
-    gamma: float,
-) -> torch.Tensor:
-    """Compute ground-truth returns from episode metadata.
-
-    When gamma < 1, returns are the discounted sum of per-step rewards (-1)
-    plus a terminal penalty for failures. When gamma == 1, this reduces to
-    the original linear formulation.
-
-    Args:
-        steps_remaining: (B,) or (B, 1) int tensor.
-        success: (B,) or (B, 1) bool tensor.
-        max_episode_length: max steps in any episode.
-        c_fail: failure penalty.
-        gamma: discount factor in (0, 1].
-
-    Returns:
-        (B,) float tensor with returns in [-1, 0].
-    """
-    steps = steps_remaining.float().squeeze(-1)
-    succ = success.squeeze(-1)
-
-    if gamma == 1.0:
-        returns = torch.where(
-            succ,
-            -steps / max_episode_length,
-            (-steps - c_fail + 1) / max_episode_length,
-        )
-    else:
-        # Discounted sum of per-step reward (-1): sum_{k=0}^{T-1} gamma^k * (-1)
-        # = -(1 - gamma^T) / (1 - gamma)
-        discounted_steps = -(1 - gamma**steps) / (1 - gamma)
-        fail_penalty = -c_fail * gamma**steps
-        undiscounted_return = torch.where(
-            succ, discounted_steps, discounted_steps + fail_penalty
-        )
-        # Normalize to [-1, 0] using the worst-case return (max steps + fail penalty)
-        max_return = (
-            -(1 - gamma**max_episode_length) / (1 - gamma)
-            - c_fail * gamma**max_episode_length
-        )
-        returns = undiscounted_return / abs(max_return)
-
-    return returns.clamp(-1.0, 0.0)
-
-
-def precompute_maha_returns(
-    maha: np.ndarray,
-    episode_index: np.ndarray,
-    gamma: float,
-) -> tuple[np.ndarray, float]:
-    """Pre-compute per-frame returns using negative Mahalanobis distance as reward.
-
-    For each episode, G_t = sum_{k=0}^{T-t-1} gamma^k * -maha[t+k]. Returns are
-    normalized to [-1, 0] by dividing by the max absolute return across all frames.
-
-    Args:
-        maha: (N,) float64 array of per-frame Mahalanobis distances.
-        episode_index: (N,) int array of episode indices.
-        gamma: discount factor in (0, 1].
-
-    Returns:
-        (returns, norm_constant) where *returns* is a ``(num_frames,)`` float64
-        array of normalized returns in ``[-1, 0]`` and *norm_constant* is the
-        divisor used for normalization.
-    """
-
-    num_frames = len(maha)
-    returns = np.zeros(num_frames, dtype=np.float64)
-
-    # Reverse pass computing discounted returns within each episode
-    i = num_frames - 1
-    while i >= 0:
-        ep = episode_index[i]
-        # Find episode start
-        j = i
-        while j >= 0 and episode_index[j] == ep:
-            j -= 1
-        ep_start = j + 1
-        # Backward pass: G_t = -maha[t] + gamma * G_{t+1}
-        cumsum = 0.0
-        for k in range(i, ep_start - 1, -1):
-            cumsum = -maha[k] + gamma * cumsum
-            returns[k] = cumsum
-        i = ep_start - 1
-
-    # Normalize to [-1, 0]
-    norm_constant = np.abs(returns).max()
-    if norm_constant > 0:
-        returns = returns / norm_constant
-
-    return returns, float(norm_constant)
 
 
 @draccus.wrap()
@@ -192,6 +95,7 @@ def main(cfg: TrainValueConfig):
         [ep_lengths[ep] - fi - 1 for ep, fi in zip(episode_index, frame_index)],
         dtype=np.int32,
     )
+    success_arr = np.array([bool(s.item()) for s in dataset.hf_dataset["success"]])
     max_episode_length = max(ep_lengths.values())
     print(f"Max episode length: {max_episode_length}")
     print(f"Dataset: {dataset.num_episodes} episodes, {dataset.num_frames} frames")
@@ -227,57 +131,21 @@ def main(cfg: TrainValueConfig):
     assert scheduler is not None
 
     # ── Pre-compute returns tensors ──
-    steps_remaining_tensor = torch.tensor(
-        steps_remaining_arr, dtype=torch.float32, device=device
+    reward_context = build_reward_context(
+        cfg,
+        dataset=dataset,
+        device=str(device),
+        episode_index=episode_index,
+        success=success_arr,
+        steps_remaining=steps_remaining_arr,
+        max_episode_length=max_episode_length,
     )
-    maha_norm = None
-    maha_returns_tensor = None
-    if cfg.reward_type == "maha_distance":
-        from huggingface_hub import hf_hub_download
-        from lerobot.configs.policies import PreTrainedConfig
-        from lerobot.policies.factory import make_policy
-        from lerobot.policies.pi05.modeling_pi05 import PI05Policy
-        from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
-        from safetensors.numpy import load_file
+    print(f"Reward norm constant: {reward_context.normalization_constant:.4f}")
+    print(f"Failure penalty: {reward_context.failure_penalty:.4f}")
 
-        from distal.compute_maha_stats import compute_maha_distances
-
-        stats_file = hf_hub_download(
-            cfg.stats_repo_id, "stats.safetensors", repo_type="dataset"
-        )
-        data = load_file(stats_file)
-        gauss_mean = data["mean"]
-        gauss_cov_inv = data["cov_inv"]
-        print(
-            f"Loaded Gaussian stats from {cfg.stats_repo_id}, dim={gauss_mean.shape[0]}"
-        )
-
-        print("Loading policy for Mahalanobis distance computation...")
-        policy_cfg = PreTrainedConfig.from_pretrained(cfg.base_policy)
-        policy_cfg.pretrained_path = Path(cfg.base_policy)
-        policy_cfg.device = str(device)
-        maha_policy = make_policy(cfg=policy_cfg, ds_meta=dataset.meta)
-        assert isinstance(maha_policy, (PI05Policy, SmolVLAPolicy))
-        maha_policy.eval()
-        policy_preprocessor, _ = make_advantage_pre_post_processors(AdvantageConfig())
-
-        maha_arr = compute_maha_distances(
-            maha_policy,
-            policy_preprocessor,
-            dataset,
-            gauss_mean,
-            gauss_cov_inv,
-            cfg.batch_size,
-            cfg.num_workers,
-        )
-        maha_returns_arr, maha_norm = precompute_maha_returns(
-            maha_arr, episode_index, cfg.gamma
-        )
-        maha_returns_tensor = torch.tensor(
-            maha_returns_arr, dtype=torch.float32, device=device
-        )
-        print(f"Maha norm constant: {maha_norm:.4f}")
-        model.get_buffer("maha_norm").fill_(maha_norm)
+    returns_tensor = torch.tensor(
+        reward_context.returns, dtype=torch.float32, device=device
+    )
 
     # ── Training loop ──
     model.train()
@@ -293,23 +161,9 @@ def main(cfg: TrainValueConfig):
         batch = next(data_iter)
         dataloading_s = time.perf_counter() - dataloading_start
 
-        success = batch.get("success")
         indices = batch["index"].long().to(device)
         batch = preprocessor(batch)
-
-        if cfg.reward_type == "maha_distance":
-            assert maha_returns_tensor is not None
-            returns = maha_returns_tensor[indices]
-        else:
-            returns = compute_returns(
-                steps_remaining_tensor[indices],
-                success.to(device),
-                max_episode_length,
-                cfg.c_fail,
-                cfg.gamma,
-            )
-
-        batch["returns"] = returns
+        batch["returns"] = returns_tensor[indices]
 
         update_start = time.perf_counter()
         with autocast:
@@ -345,11 +199,13 @@ def main(cfg: TrainValueConfig):
         if step % cfg.save_interval == 0:
             ckpt_dir = output_dir / f"checkpoint_{step}"
             model.save_pretrained(ckpt_dir)
+            save_reward_context(ckpt_dir, reward_context, dataset.num_frames)
             print(f"Saved checkpoint: {ckpt_dir}")
 
     # Save final checkpoint
     final_dir = output_dir / "checkpoint_final"
     model.save_pretrained(final_dir)
+    save_reward_context(final_dir, reward_context, dataset.num_frames)
     print(f"Training complete. Final checkpoint: {final_dir}")
 
     # Push to hub
