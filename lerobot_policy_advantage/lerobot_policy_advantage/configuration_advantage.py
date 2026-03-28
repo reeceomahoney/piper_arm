@@ -16,6 +16,7 @@ class AdvantageConfig(SmolVLAConfig):
     fixed_advantage: bool = False
     advantage_dropout: float = 0.3
     guidance_scale: float = 1.0
+    num_adv_tokens: int = 16
 
     def __post_init__(self):
         super().__post_init__()
