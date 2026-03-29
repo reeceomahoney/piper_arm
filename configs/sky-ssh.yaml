@@ -1,10 +1,9 @@
 name: distal-train
 
 resources:
-  cloud: runpod
-  accelerators: RTXPRO6000
-  # cpus: 16+
-  # disk_size: 64
+  cloud: ssh
+  accelerators: RTX4090:2
+  cpus: 16+
   autostop:
     idle_minutes: 10
     down: true
@@ -14,6 +13,8 @@ envs:
   WANDB_API_KEY:
   MUJOCO_GL: egl
   PYOPENGL_PLATFORM: egl
+  CMAKE_POLICY_VERSION_MINIMUM: 3.5
+  MUJOCO_EGL_DEVICE_ID: 0
 workdir: .
 
 setup: |
@@ -42,5 +43,4 @@ setup: |
 
 run: |
   cd ~/sky_workdir
-  uv run mise run adv-train adv-libero-steps-penalty
-  # uv run distal/compute_advantage_labels.py
+  uv run distal/eval_variance.py
