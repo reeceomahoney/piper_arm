@@ -15,8 +15,8 @@ env:
   process_isolation: false
 
 eval:
-  n_episodes: 5
-  batch_size: 5
+  n_episodes: 20
+  batch_size: 10
 
 wandb:
   enable: true
