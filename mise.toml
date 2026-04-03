@@ -16,7 +16,8 @@ lerobot-train --config_path configs/advantage_train.yaml \
   --policy.path=reece-omahoney/adv-libero-base \
   --policy.repo_id=reece-omahoney/{{ usage.name }} \
   --policy.fixed_advantage=false \
-  --policy.advantage_dropout=0.3
+  --policy.advantage_dropout=0.3 \
+  --policy.compile_model=true \
 """
 
 [tasks.eval]

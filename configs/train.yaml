@@ -29,6 +29,7 @@ policy:
   max_state_dim: 8
   max_action_dim: 7
   scheduler_decay_steps: 100_000
+  compile_model: true
 
 eval:
   n_episodes: 5
