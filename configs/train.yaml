@@ -13,6 +13,8 @@ env:
   task: libero_10
   fps: 10
   process_isolation: true
+  observation_height: 256
+  observation_width: 256
 
 # these are overriden when finetuning
 policy:

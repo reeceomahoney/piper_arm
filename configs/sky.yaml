@@ -1,8 +1,11 @@
 name: distal-train
 
 resources:
-  cloud: runpod
-  accelerators: RTXPRO6000
+  cloud: gcp
+  accelerators: tpu-v4-8
+  zone: us-central2-b
+  accelerator_args:
+    runtime_version: tpu-ubuntu2204-base
   # cpus: 16+
   # disk_size: 64
   autostop:
