@@ -1,8 +1,9 @@
 """Advantage-conditioned policy model.
 
-Extends SmolVLAPolicy with a learned advantage embedding injected between the
-prefix (images+language+state) and suffix (noisy actions+time) during training,
-and always set to positive (advantage=1) during inference.
+Extends SmolVLAPolicy with advantage conditioning injected between the prefix
+(images+language+state) and suffix (noisy actions+time) during training, and
+always set to positive (advantage=1) during inference. Supports a learned
+embedding (default) or text-token embedding (use_text_advantage=True).
 """
 
 import math
@@ -16,12 +17,16 @@ from lerobot.policies.smolvla.modeling_smolvla import (
 )
 from lerobot.utils.constants import OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS
 from torch import Tensor, nn
+from transformers import AutoTokenizer
 
 from .configuration_advantage import AdvantageConfig
 
+ADVANTAGE_POSITIVE = "Advantage: positive"
+ADVANTAGE_NEGATIVE = "Advantage: negative"
+
 
 class AdvantageVLAFlowMatching(VLAFlowMatching):
-    """VLAFlowMatching with learned advantage conditioning in the prefix."""
+    """VLAFlowMatching with advantage conditioning in the prefix."""
 
     def __init__(self, config: AdvantageConfig, **kwargs):
         super().__init__(config, **kwargs)
@@ -29,11 +34,28 @@ class AdvantageVLAFlowMatching(VLAFlowMatching):
         self.advantage_dropout = config.advantage_dropout
         self.num_adv_tokens = config.num_adv_tokens
 
-        vlm_hidden_size = self.vlm_with_expert.vlm.config.text_config.hidden_size
-        self.adv_embedding = nn.Embedding(2, vlm_hidden_size)
+        if config.use_text_advantage:
+            tokenizer = AutoTokenizer.from_pretrained(config.vlm_model_name)
+            assert tokenizer is not None
+
+            pos_ids = tokenizer.encode(ADVANTAGE_POSITIVE, add_special_tokens=False)
+            neg_ids = tokenizer.encode(ADVANTAGE_NEGATIVE, add_special_tokens=False)
+
+            max_len = max(len(pos_ids), len(neg_ids))
+            pad_id = tokenizer.pad_token_id or 0
+            pos_ids += [pad_id] * (max_len - len(pos_ids))
+            neg_ids += [pad_id] * (max_len - len(neg_ids))
+
+            self.register_buffer(
+                "adv_tokens",
+                torch.tensor([neg_ids, pos_ids], dtype=torch.long),
+            )
+        else:
+            vlm_hidden_size = self.vlm_with_expert.vlm.config.text_config.hidden_size
+            self.adv_embedding = nn.Embedding(2, vlm_hidden_size)
 
     def embed_advantage(self, adv_labels):
-        """Embed advantage labels via learned embedding + repetition.
+        """Embed advantage labels into prefix embeddings.
 
         Args:
             adv_labels: (batch,) integer labels, 0=negative, 1=positive.
@@ -41,15 +63,22 @@ class AdvantageVLAFlowMatching(VLAFlowMatching):
         Returns:
             (adv_embs, adv_pad_masks, adv_att_masks) ready for prefix concat.
         """
-        # (B, hidden_dim)
-        adv_emb = self.adv_embedding(adv_labels)
-        embed_dim = adv_emb.shape[-1]
-        adv_emb = adv_emb * math.sqrt(embed_dim)
-
         bsize = adv_labels.shape[0]
 
-        # Repeat to (B, num_adv_tokens, hidden_dim)
-        adv_embs = adv_emb.unsqueeze(1).expand(bsize, self.num_adv_tokens, -1)
+        if self.config.use_text_advantage:
+            # Text-token approach: embed via VLM language embedding layer
+            adv_token_ids = self.adv_tokens[adv_labels]  # (B, seq_len)
+            adv_embs = self.vlm_with_expert.embed_language_tokens(adv_token_ids)
+            embed_dim = adv_embs.shape[-1]
+            adv_embs = adv_embs * math.sqrt(embed_dim)
+            seq_len = adv_token_ids.shape[1]
+        else:
+            # Learned embedding approach: single embedding repeated num_adv_tokens times
+            adv_emb = self.adv_embedding(adv_labels)  # (B, hidden_dim)
+            embed_dim = adv_emb.shape[-1]
+            adv_emb = adv_emb * math.sqrt(embed_dim)
+            adv_embs = adv_emb.unsqueeze(1).expand(bsize, self.num_adv_tokens, -1)
+            seq_len = self.num_adv_tokens
 
         # Advantage dropout: zero out embeddings for classifier-free guidance
         if self.training and self.advantage_dropout > 0:
@@ -59,11 +88,11 @@ class AdvantageVLAFlowMatching(VLAFlowMatching):
             adv_embs = adv_embs * keep[:, None, None]
 
         adv_pad_masks = torch.ones(
-            bsize, self.num_adv_tokens, dtype=torch.bool, device=adv_embs.device
+            bsize, seq_len, dtype=torch.bool, device=adv_embs.device
         )
         # att_mask=1: causal attention (last tokens in prefix)
         adv_att_masks = torch.ones(
-            bsize, self.num_adv_tokens, dtype=torch.bool, device=adv_embs.device
+            bsize, seq_len, dtype=torch.bool, device=adv_embs.device
         )
 
         return adv_embs, adv_pad_masks, adv_att_masks
