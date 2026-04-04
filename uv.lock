@@ -1777,7 +1777,7 @@ wheels = [
 [[package]]
 name = "lerobot"
 version = "0.5.1"
-source = { git = "https://github.com/reeceomahoney/lerobot?rev=feat%2Fcombined-fixes#68efb806fbc2d5a2d60192e6a80a4f252168b4fa" }
+source = { git = "https://github.com/reeceomahoney/lerobot?rev=feat%2Fcombined-fixes#c92a47f5ba0747a0bf82c41f9b15f1abcd784ecd" }
 dependencies = [
     { name = "accelerate" },
     { name = "av" },
