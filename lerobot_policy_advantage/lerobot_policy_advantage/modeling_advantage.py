@@ -28,6 +28,8 @@ ADVANTAGE_NEGATIVE = "Advantage: negative"
 class AdvantageVLAFlowMatching(VLAFlowMatching):
     """VLAFlowMatching with advantage conditioning in the prefix."""
 
+    adv_tokens: Tensor
+
     def __init__(self, config: AdvantageConfig, **kwargs):
         super().__init__(config, **kwargs)
         self.config: AdvantageConfig = config
