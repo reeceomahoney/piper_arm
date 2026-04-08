@@ -747,7 +747,7 @@ dev = [
 requires-dist = [
     { name = "google-api-python-client", specifier = ">=2.193.0" },
     { name = "google-cloud-tpu", specifier = ">=1.26.0" },
-    { name = "lerobot", extras = ["smolvla", "libero", "pi"], git = "https://github.com/reeceomahoney/lerobot?rev=feat%2Fcombined-fixes" },
+    { name = "lerobot", extras = ["smolvla", "libero", "pi"], git = "https://github.com/reeceomahoney/lerobot?rev=dev" },
     { name = "lerobot-policy-advantage", editable = "lerobot_policy_advantage" },
     { name = "matplotlib", specifier = ">=3.7.0" },
     { name = "opencv-contrib-python", specifier = ">=4.12.0.88" },
@@ -1783,8 +1783,8 @@ wheels = [
 
 [[package]]
 name = "lerobot"
-version = "0.5.1"
-source = { git = "https://github.com/reeceomahoney/lerobot?rev=feat%2Fcombined-fixes#c92a47f5ba0747a0bf82c41f9b15f1abcd784ecd" }
+version = "0.5.2"
+source = { git = "https://github.com/reeceomahoney/lerobot?rev=dev#d8016ea6b1e335484792bb8b28c78fa1ad76f827" }
 dependencies = [
     { name = "accelerate" },
     { name = "av" },
@@ -1841,7 +1841,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "distal" },
-    { name = "lerobot", extras = ["smolvla"], git = "https://github.com/reeceomahoney/lerobot?rev=feat%2Fcombined-fixes" },
+    { name = "lerobot", extras = ["smolvla"], git = "https://github.com/reeceomahoney/lerobot?rev=dev" },
 ]
 
 [[package]]

@@ -4,7 +4,6 @@ env:
   type: libero
   task: libero_10
   fps: 10
-  process_isolation: false
   observation_height: 256
   observation_width: 256
 
