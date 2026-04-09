@@ -3,7 +3,7 @@ name: distal-train
 resources:
   cloud: ssh
   accelerators: RTX4090:2
-  cpus: 32
+  cpus: 31
   autostop:
     idle_minutes: 10
     down: true
