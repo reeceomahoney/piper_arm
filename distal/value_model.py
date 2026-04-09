@@ -50,7 +50,6 @@ class ValueConfig(PreTrainedConfig):
     freeze_vision_encoder: bool = True
     num_unfrozen_layers: int = 3
     hl_gauss_sigma: float = 0.0
-    self_attn_every_n_layers: int = 2
 
     # Training presets
     optimizer_lr: float = 1e-4
@@ -116,8 +115,9 @@ class ValueFunction(PreTrainedPolicy):
             load_vlm_weights=True,
             attention_mode="cross_attn",
             num_vlm_layers=config.num_vlm_layers,
-            self_attn_every_n_layers=config.self_attn_every_n_layers,
-            expert_width_multiplier=0.1,
+            # hardcoded from smolvla checkpoint
+            self_attn_every_n_layers=2,
+            expert_width_multiplier=0.5,
             device="cpu",
         )
 
