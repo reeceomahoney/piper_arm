@@ -35,10 +35,10 @@ class TrainValueConfig:
     reward_type: str = "steps"  # "steps" or "maha"
     failure_penalty_scale: float = 1.0
     stats_repo_id: str = "reece-omahoney/maha-stats"
-    base_policy: str = "reece-omahoney/adv-libero-base"
+    base_policy: str = "reece-omahoney/smolvla-libero-bsz-256"
 
     value: ValueConfig = field(default_factory=ValueConfig)
-    value_repo_id: str = "reece-omahoney/value-steps-50-bins"
+    value_repo_id: str = "reece-omahoney/value-steps-new-arch"
     push_to_hub: bool = True
 
     # Training

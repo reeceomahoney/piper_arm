@@ -16,10 +16,11 @@ envs:
   CMAKE_POLICY_VERSION_MINIMUM: 3.5
   MUJOCO_EGL_DEVICE_ID: 0
   SLURM_JOB_ID: 0  # suppress tqdm
+  CUDA_VISIBLE_DEVICES: 1
 workdir: .
 
 setup: |
-  sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libglvnd0 libopengl0 cmake g++
+  sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libglvnd0 libopengl0 cmake g++ ffmpeg
 
   curl https://mise.run | sh
   echo 'eval "$($HOME/.local/bin/mise activate bash)"' >> ~/.bashrc
@@ -44,4 +45,4 @@ setup: |
 
 run: |
   cd ~/sky_workdir
-  uv run distal/eval_variance.py
+  uv run distal/train_value.py
