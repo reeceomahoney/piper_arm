@@ -33,24 +33,24 @@ class TrainValueConfig:
     dataset_repo_id: str = "reece-omahoney/libero-10"
     gamma: float = 1.0
     reward_type: str = "steps"  # "steps" or "maha"
-    failure_penalty_scale: float = 1.0
+    failure_penalty_scale: float = 0.125
     stats_repo_id: str = "reece-omahoney/maha-stats"
 
     value: ValueConfig = field(default_factory=ValueConfig)
-    value_repo_id: str = "reece-omahoney/value-steps-new-arch"
+    value_repo_id: str = "reece-omahoney/value-steps-gemma"
     push_to_hub: bool = True
 
     # Training
-    batch_size: int = 32
-    total_steps: int = 100_000
+    batch_size: int = 128
+    total_steps: int = 15_000
 
     # Logging & checkpointing
     log_interval: int = 100
-    save_interval: int = 10_000
+    save_interval: int = 3_000
     output_dir: str | None = None
     wandb_project: str | None = "distal-value"
 
-    num_workers: int = 4
+    num_workers: int = 8
     seed: int = 42
     use_amp: bool = True
 

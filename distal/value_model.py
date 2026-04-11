@@ -57,15 +57,15 @@ class ValueConfig(PreTrainedConfig):
     value_head_hidden_dim: int = 768
 
     # Training presets
-    optimizer_lr: float = 1e-4
+    optimizer_lr: float = 3e-4
     optimizer_betas: tuple[float, float] = (0.9, 0.95)
     optimizer_eps: float = 1e-8
     optimizer_weight_decay: float = 0.01
-    optimizer_grad_clip_norm: float = 10
+    optimizer_grad_clip_norm: float = 1.0
 
     scheduler_warmup_steps: int = 1_000
     scheduler_decay_steps: int = 30_000
-    scheduler_decay_lr: float = 2.5e-6
+    scheduler_decay_lr: float = 0
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
