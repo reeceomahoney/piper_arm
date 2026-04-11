@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12, <3.13"
 dependencies = [
-  "lerobot[smolvla, libero, pi] @ git+https://github.com/reeceomahoney/lerobot@fix/rollout-return-observations-nested-dict",
+  "lerobot[smolvla, libero, pi]",
   "piper-sdk>=0.6.1",
   "opencv-contrib-python>=4.12.0.88",
   "pyrealsense2-macosx>=2.54.2; sys_platform == 'darwin'",
@@ -22,6 +22,7 @@ dependencies = [
   "google-api-python-client>=2.193.0",
   "google-cloud-tpu>=1.26.0",
   "pyopengl-accelerate>=3.1.10",
+  "hf-libero>=0.1.3",
 ]
 
 [dependency-groups]
@@ -37,6 +38,7 @@ lerobot_robot_piper = { path = "lerobot_robot_piper", editable = true }
 lerobot_teleoperator_piper = { path = "lerobot_teleoperator_piper", editable = true }
 lerobot_policy_advantage = { path = "lerobot_policy_advantage", editable = true }
 slurm-tools = { git = "https://github.com/reeceomahoney/slurm-tools.git" }
+lerobot = { git = "https://github.com/reeceomahoney/lerobot.git", branch = "fix/rollout-return-observations-nested-dict" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
