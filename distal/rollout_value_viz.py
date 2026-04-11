@@ -21,6 +21,7 @@ from lerobot.utils.constants import ACTION
 from lerobot.utils.utils import inside_slurm
 from tqdm import tqdm
 
+import lerobot_policy_advantage as lerobot_policy_advantage
 from distal.value_model import ValueFunction, make_value_pre_post_processors
 
 
@@ -149,7 +150,12 @@ def log_episode_to_rerun(result: dict, episode_idx: int) -> None:
 
 @draccus.wrap()
 def main(cfg: RolloutValueVizConfig):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
 
     # Load policy
     env_cfg = LiberoEnvConfig(cfg.suite_name, fps=10, task_ids=cfg.task_ids or [9])
@@ -161,8 +167,11 @@ def main(cfg: RolloutValueVizConfig):
     assert isinstance(policy, SmolVLAPolicy)
     policy.eval()
 
+    device_override = {"device_processor": {"device": str(device)}}
     preprocessor, postprocessor = make_pre_post_processors(
-        policy_cfg=policy_cfg, pretrained_path=str(policy_cfg.pretrained_path)
+        policy_cfg=policy_cfg,
+        pretrained_path=str(policy_cfg.pretrained_path),
+        preprocessor_overrides=device_override,
     )
     env_preprocessor, env_postprocessor = make_env_pre_post_processors(
         env_cfg, policy_cfg
