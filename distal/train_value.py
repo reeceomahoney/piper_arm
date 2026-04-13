@@ -22,7 +22,7 @@ from lerobot_policy_advantage.configuration_advantage import AdvantageConfig
 from lerobot_policy_advantage.processor_advantage import (
     make_advantage_pre_post_processors,
 )
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from distal.rewards import build_reward_context, save_reward_context
 from distal.value_model import ValueConfig, ValueFunction
@@ -51,6 +51,7 @@ class TrainValueConfig:
     output_dir: str | None = None
     wandb_project: str | None = "distal-value"
 
+    val_fraction: float = 0.1
     num_workers: int = 4
     seed: int = 42
     use_amp: bool = True
@@ -100,13 +101,34 @@ def main(cfg: TrainValueConfig):
     print(f"Max episode length: {max_episode_length}")
     print(f"Dataset: {dataset.num_episodes} episodes, {dataset.num_frames} frames")
 
+    all_episodes = sorted(ep_lengths.keys())
+    n_val = max(1, int(len(all_episodes) * cfg.val_fraction))
+    rng = random.Random(cfg.seed)
+    val_episodes = set(rng.sample(all_episodes, n_val))
+    train_episodes = set(all_episodes) - val_episodes
+
+    train_indices = [i for i, ep in enumerate(episode_index) if ep in train_episodes]
+    val_indices = [i for i, ep in enumerate(episode_index) if ep in val_episodes]
+    print(
+        f"Train: {len(train_episodes)} episodes ({len(train_indices)} frames)  "
+        f"Val: {len(val_episodes)} episodes ({len(val_indices)} frames)"
+    )
+
     loader = DataLoader(
-        dataset,
+        Subset(dataset, train_indices),
         batch_size=cfg.batch_size,
         shuffle=True,
         num_workers=cfg.num_workers,
         pin_memory=True,
         drop_last=True,
+    )
+    val_loader = DataLoader(
+        Subset(dataset, val_indices),
+        batch_size=cfg.batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        pin_memory=True,
+        drop_last=False,
     )
 
     # ── Model & preprocessor ──
@@ -176,9 +198,26 @@ def main(cfg: TrainValueConfig):
 
         # ── Logging ──
         if step % cfg.log_interval == 0:
+            model.eval()
+            val_mae_sum = 0.0
+            val_count = 0
+            with torch.no_grad():
+                for val_batch in val_loader:
+                    val_indices_batch = val_batch["index"].long().to(device)
+                    val_batch = preprocessor(val_batch)
+                    val_batch["returns"] = returns_tensor[val_indices_batch]
+                    with autocast:
+                        val_logits = model.compute_logits(val_batch)
+                    val_preds = model.logits_to_value(val_logits)
+                    val_mae_sum += (val_preds - val_batch["returns"]).abs().sum().item()
+                    val_count += val_preds.shape[0]
+            val_mae = val_mae_sum / val_count
+            model.train()
+
             log = {
                 "loss": loss.item(),
                 "mae": info["mae"],
+                "val_mae": val_mae,
                 "lr": scheduler.get_last_lr()[0],
                 "update_s": update_s,
                 "dataloading_s": dataloading_s,
@@ -187,7 +226,7 @@ def main(cfg: TrainValueConfig):
             lr_str = f"{log['lr']:.2e}"
             print(
                 f"[step {step:>6d}] loss={log['loss']:.4f}"
-                f"  mae={log['mae']:.4f}  lr={lr_str}"
+                f"  mae={log['mae']:.4f}  val_mae={val_mae:.4f}  lr={lr_str}"
                 f"  update_s={update_s:.3f}  dataloading_s={dataloading_s:.3f}"
             )
             if cfg.wandb_project:
