@@ -33,12 +33,12 @@ from distal.value_model import ValueFunction
 @dataclass
 class ComputeAdvantageLabelsConfig:
     value_checkpoint: str = "reece-omahoney/value-steps-penalty"
-    policy_checkpoint: str = "reece-omahoney/adv-libero-base"
+    policy_checkpoint: str = "reece-omahoney/adv-libero-base-fixed"
     dataset_repo_id: str = "reece-omahoney/libero-10"
     new_dataset_repo_id: str = "reece-omahoney/libero-10-adv-steps-penalty"
     push_to_hub: bool = True
     device: str = "cuda"
-    n_step: int = 10
+    n_step: int = 50
     advantage_percentile: float = 0.7
     batch_size: int = 256
     num_workers: int = 16

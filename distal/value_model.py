@@ -1,13 +1,9 @@
-"""Distributional value function using SmolVLM backbone.
+"""Distributional value function using SmolVLM + expert backbone.
 
-Initializes from a trained SmolVLA policy checkpoint, reusing the full VLM
-forward path (SmolVLMWithExpertModel) for compatibility with the pretrained
-weights. The expert is instantiated but unused — value is extracted from the
-VLM's last prefix token hidden state, fed through an MLP value head that
-predicts returns as a categorical distribution over discrete bins.
-
-Supports partial unfreezing: vision encoder is always frozen, and optionally
-only the top N language model layers are unfrozen for fine-tuning.
+Architecture mirrors SmolVLA's VLM + action expert pattern but replaces noisy-action
+suffix tokens with a single learned value query that cross-attends to the VLM prefix.
+The value head predicts returns as a categorical distribution over discrete bins
+(RECAP-style from pi0.6).
 """
 
 import math
@@ -26,6 +22,7 @@ from lerobot.optim.schedulers import (
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.smolvla.modeling_smolvla import (
     make_att_2d_masks,
+    pad_tensor,
     pad_vector,
     resize_with_pad,
 )
@@ -42,13 +39,17 @@ from torch import Tensor, nn
 @dataclass
 class ValueConfig(PreTrainedConfig):
     vlm_model_name: str = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
+    expert_width_multiplier: float = 0.5
     resize_imgs_with_padding: tuple[int, int] = (256, 256)
     max_state_dim: int = 8
-    n_bins: int = 50
+    n_bins: int = 201
     tokenizer_max_length: int = 48
+    prefix_length: int = -1
+    add_image_special_tokens: bool = False
     num_vlm_layers: int = 16
+    self_attn_every_n_layers: int = 2
     freeze_vision_encoder: bool = True
-    num_unfrozen_layers: int = 3
+    train_expert_only: bool = True
     hl_gauss_sigma: float = 0.0
 
     # Training presets
@@ -111,109 +112,61 @@ class ValueFunction(PreTrainedPolicy):
         self.vlm_with_expert = SmolVLMWithExpertModel(
             model_id=config.vlm_model_name,
             freeze_vision_encoder=config.freeze_vision_encoder,
-            train_expert_only=True,
+            train_expert_only=config.train_expert_only,
             load_vlm_weights=True,
             attention_mode="cross_attn",
             num_vlm_layers=config.num_vlm_layers,
-            # hardcoded from smolvla checkpoint
-            self_attn_every_n_layers=2,
-            expert_width_multiplier=0.75,
+            self_attn_every_n_layers=config.self_attn_every_n_layers,
+            expert_width_multiplier=config.expert_width_multiplier,
             device="cpu",
         )
 
         vlm_hidden = self.vlm_with_expert.config.text_config.hidden_size
+        expert_hidden = self.vlm_with_expert.expert_hidden_size
 
         # State projection (same as SmolVLA)
         self.state_proj = nn.Linear(config.max_state_dim, vlm_hidden)
 
-        # Value head: vlm_hidden → logits over bins
+        # Single learnable value query token (replaces noisy-action suffix)
+        self.value_query = nn.Parameter(torch.randn(1, 1, expert_hidden) * 0.02)
+
+        # Value head: expert_hidden → logits over bins
         self.value_head = nn.Sequential(
-            nn.Linear(vlm_hidden, vlm_hidden),
+            nn.Linear(expert_hidden, expert_hidden),
             nn.SiLU(),
-            nn.Linear(vlm_hidden, config.n_bins),
+            nn.Linear(expert_hidden, config.n_bins),
         )
 
         # Bin centers for computing expected value
         self.register_buffer("bin_centers", torch.linspace(-1.0, 0.0, config.n_bins))
 
+        # Special tokens for image wrapping
+        self.fake_image_token = (
+            self.vlm_with_expert.processor.tokenizer.fake_image_token_id
+        )
+        self.global_image_token = (
+            self.vlm_with_expert.processor.tokenizer.global_image_token_id
+        )
+        self.global_image_start_token = torch.tensor(
+            [self.fake_image_token, self.global_image_token], dtype=torch.long
+        )
+        self.image_end_token = torch.tensor([self.fake_image_token], dtype=torch.long)
+        self.add_image_special_tokens = config.add_image_special_tokens
+        self.prefix_length = config.prefix_length
+
         self.set_requires_grad()
 
-    def load_vlm_from_policy(self, policy_path: str):
-        """Load VLM and state_proj weights from a SmolVLA policy checkpoint."""
-        from pathlib import Path
-
-        from safetensors.torch import load_file
-
-        path = Path(policy_path)
-        if path.exists():
-            safetensors_path = (
-                str(path)
-                if path.suffix == ".safetensors"
-                else str(path / "model.safetensors")
-            )
-        else:
-            from huggingface_hub import hf_hub_download
-
-            safetensors_path = hf_hub_download(
-                policy_path, "model.safetensors", repo_type="model"
-            )
-
-        policy_weights = load_file(safetensors_path)
-
-        # Extract vlm_with_expert and state_proj weights
-        vlm_expert_state = {}
-        state_proj_state = {}
-        for key, value in policy_weights.items():
-            if key.startswith("model.vlm_with_expert."):
-                new_key = key.removeprefix("model.vlm_with_expert.")
-                vlm_expert_state[new_key] = value
-            elif key.startswith("model.state_proj."):
-                new_key = key.removeprefix("model.state_proj.")
-                state_proj_state[new_key] = value
-
-        missing, unexpected = self.vlm_with_expert.load_state_dict(
-            vlm_expert_state, strict=False
-        )
-        if missing:
-            print(f"Warning: missing keys: {missing[:10]}")
-        if unexpected:
-            print(f"Warning: unexpected keys: {unexpected[:10]}")
-
-        if state_proj_state:
-            self.state_proj.load_state_dict(state_proj_state)
-            print("Loaded state_proj from policy checkpoint")
-
-        print(f"Loaded VLM weights from {policy_path}")
-
     def set_requires_grad(self):
-        """Unfreeze top N VLM layers, state_proj, and value_head.
-
-        SmolVLMWithExpertModel with train_expert_only=True freezes the entire
-        VLM. We selectively unfreeze just the top N language model layers and
-        freeze the expert (unused for value prediction).
-        """
-        for p in self.vlm_with_expert.lm_expert.parameters():
+        """Freeze vision encoder. VLM + expert + heads stay trainable."""
+        vision_model = self.vlm_with_expert.get_vlm_model().vision_model
+        vision_model.eval()
+        for p in vision_model.parameters():
             p.requires_grad = False
-
-        text_layers = self.vlm_with_expert.get_vlm_model().text_model.layers
-        num_layers = len(text_layers)
-        num_frozen = num_layers - self.config.num_unfrozen_layers
-        for i in range(num_frozen, num_layers):
-            for p in text_layers[i].parameters():
-                p.requires_grad = True
-
-        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        total = sum(p.numel() for p in self.parameters())
-        print(
-            f"Value model: {trainable:,} trainable / {total:,} total "
-            f"({num_frozen} frozen + "
-            f"{self.config.num_unfrozen_layers} unfrozen VLM layers)"
-        )
 
     def train(self, mode: bool = True):
         super().train(mode)
+        # Keep vision encoder in eval mode
         self.vlm_with_expert.get_vlm_model().vision_model.eval()
-        self.vlm_with_expert.lm_expert.eval()
         return self
 
     def embed_prefix(
@@ -226,14 +179,33 @@ class ValueFunction(PreTrainedPolicy):
     ) -> tuple[Tensor, Tensor, Tensor]:
         """Embed images, language, and state into prefix tokens.
 
-        Mirrors VLAFlowMatching.embed_prefix to stay compatible with
-        SmolVLMWithExpertModel's forward path.
+        Duplicated from VLAFlowMatching.embed_prefix to stay decoupled from the
+        installed lerobot action-policy internals.
         """
         embs: list[Tensor] = []
         pad_masks: list[Tensor] = []
         att_masks: list[int] = []
 
         for img, img_mask in zip(images, img_masks, strict=False):
+            if self.add_image_special_tokens:
+                image_start_token = (
+                    self.vlm_with_expert.embed_language_tokens(
+                        self.global_image_start_token.to(
+                            device=self.vlm_with_expert.vlm.device
+                        )
+                    )
+                    .unsqueeze(0)
+                    .expand(img.shape[0], -1, -1)
+                )
+                image_start_mask = torch.ones_like(
+                    image_start_token[:, :, 0],
+                    dtype=torch.bool,
+                    device=image_start_token.device,
+                )
+                att_masks += [0] * image_start_mask.shape[-1]
+                embs.append(image_start_token)
+                pad_masks.append(image_start_mask)
+
             img_emb = self.vlm_with_expert.embed_image(img)
             img_emb_dim = img_emb.shape[-1]
             img_emb = img_emb * torch.tensor(
@@ -246,6 +218,23 @@ class ValueFunction(PreTrainedPolicy):
             embs.append(img_emb)
             pad_masks.append(img_mask)
             att_masks += [0] * num_img_embs
+
+            if self.add_image_special_tokens:
+                image_end_token = (
+                    self.vlm_with_expert.embed_language_tokens(
+                        self.image_end_token.to(device=self.vlm_with_expert.vlm.device)
+                    )
+                    .unsqueeze(0)
+                    .expand(img.shape[0], -1, -1)
+                )
+                image_end_mask = torch.ones_like(
+                    image_end_token[:, :, 0],
+                    dtype=torch.bool,
+                    device=image_end_token.device,
+                )
+                embs.append(image_end_token)
+                pad_masks.append(image_end_mask)
+                att_masks += [0] * image_end_mask.shape[1]
 
         # Language tokens
         lang_emb = self.vlm_with_expert.embed_language_tokens(lang_tokens)
@@ -262,19 +251,26 @@ class ValueFunction(PreTrainedPolicy):
         bsize = state_emb.shape[0]
         device = state_emb.device
 
-        state_mask = torch.ones(
-            bsize, state_emb.shape[1], dtype=torch.bool, device=device
-        )
+        states_seq_len = state_emb.shape[1]
+        state_mask = torch.ones(bsize, states_seq_len, dtype=torch.bool, device=device)
         pad_masks.append(state_mask)
-        att_masks += [1] * state_emb.shape[1]
+        att_masks += [1] * states_seq_len
 
         embs_cat = torch.cat(embs, dim=1)
         pad_masks_cat = torch.cat(pad_masks, dim=1)
         att_masks_t = torch.tensor(
             att_masks, dtype=torch.bool, device=pad_masks_cat.device
         )
-        att_masks_t = att_masks_t[None, :].expand(bsize, -1)
+        att_masks_t = att_masks_t[None, :]
 
+        # Pad to prefix_length if needed
+        seq_len = pad_masks_cat.shape[1]
+        if self.prefix_length > 0 and seq_len < self.prefix_length:
+            embs_cat = pad_tensor(embs_cat, self.prefix_length, pad_value=0)
+            pad_masks_cat = pad_tensor(pad_masks_cat, self.prefix_length, pad_value=0)
+            att_masks_t = pad_tensor(att_masks_t, self.prefix_length, pad_value=0)
+
+        att_masks_t = att_masks_t.expand(bsize, -1)
         return embs_cat, pad_masks_cat, att_masks_t
 
     def prepare_images(
@@ -304,48 +300,64 @@ class ValueFunction(PreTrainedPolicy):
     def compute_logits(self, batch: dict[str, Tensor]) -> Tensor:
         """Forward pass returning logits over value bins.
 
-        Passes prefix (images + language + state) through SmolVLA's VLM
-        forward path with no suffix (expert unused). Extracts the last
-        token's VLM hidden state for the value head.
+        Args:
+            batch: Preprocessed batch dict with observation.images.*, observation.state,
+                   observation.language.tokens, observation.language.attention_mask.
+
+        Returns:
+            logits: (B, n_bins) — raw logits over bin_centers.
         """
         images, img_masks = self.prepare_images(batch)
         state = self.prepare_state(batch)
         lang_tokens = batch[OBS_LANGUAGE_TOKENS]
         lang_masks = batch[OBS_LANGUAGE_ATTENTION_MASK]
 
+        # 1. Embed prefix
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
             images, img_masks, lang_tokens, lang_masks, state
         )
 
-        # Build attention mask (prefix only, no suffix)
-        att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
-        position_ids = torch.cumsum(prefix_pad_masks.long(), dim=1) - 1
+        # 2. Build suffix from value query
+        bsize = prefix_embs.shape[0]
+        device = prefix_embs.device
+        suffix_embs = self.value_query.expand(bsize, -1, -1).to(
+            dtype=prefix_embs.dtype, device=device
+        )
+        suffix_pad_masks = torch.ones(bsize, 1, dtype=torch.bool, device=device)
+        suffix_att_masks = torch.ones(
+            bsize, 1, dtype=prefix_att_masks.dtype, device=device
+        )
 
-        # Forward through VLM only (suffix=None skips expert)
-        (prefix_out, _), _ = self.vlm_with_expert.forward(
+        # 3. Concatenate masks and build 2D attention
+        pad_masks_cat = torch.cat([prefix_pad_masks, suffix_pad_masks], dim=1)
+        att_masks_cat = torch.cat([prefix_att_masks, suffix_att_masks], dim=1)
+        att_2d_masks = make_att_2d_masks(pad_masks_cat, att_masks_cat)
+        position_ids = torch.cumsum(pad_masks_cat, dim=1) - 1
+
+        # 4. Forward through VLM + expert
+        (_, suffix_out), _ = self.vlm_with_expert.forward(
             attention_mask=att_2d_masks,
             position_ids=cast(torch.LongTensor, position_ids),
             past_key_values=None,
-            inputs_embeds=cast(list[torch.FloatTensor], [prefix_embs, None]),
+            inputs_embeds=cast(list[torch.FloatTensor], [prefix_embs, suffix_embs]),
             use_cache=False,
-            fill_kv_cache=True,
+            fill_kv_cache=False,
         )
 
-        # Extract last real token per sample
-        bsize = prefix_embs.shape[0]
-        device = prefix_embs.device
-        seq_lengths = prefix_pad_masks.long().sum(dim=1) - 1
-        last_hidden = prefix_out[torch.arange(bsize, device=device), seq_lengths]
-
-        logits = self.value_head(last_hidden.to(dtype=torch.float32))
+        # 5. Extract single suffix token → value head
+        suffix_out = suffix_out[:, -1:].to(dtype=torch.float32)
+        logits = self.value_head(suffix_out.squeeze(1))  # (B, n_bins)
         return logits
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
         """Training forward pass: compute cross-entropy loss over value bins.
 
-        Expects batch to contain a "returns" key with (B,) float tensor
-        in [-1, 0]. When hl_gauss_sigma > 0, uses soft Gaussian targets
-        (HL-Gauss) instead of one-hot targets.
+        Expects batch to contain a "returns" key with (B,) float tensor in [-1, 0].
+        When hl_gauss_sigma > 0, uses soft Gaussian targets (HL-Gauss) instead of
+        one-hot targets.
+
+        Returns:
+            (loss, {"mae": float})
         """
         logits = self.compute_logits(batch)
         returns = batch["returns"]
@@ -366,7 +378,15 @@ class ValueFunction(PreTrainedPolicy):
         return loss, {"mae": mae}
 
     def predict_value(self, batch: dict[str, Tensor]) -> Tensor:
-        """Compute expected value for a batch of observations."""
+        """Compute expected value for a batch of observations.
+
+        Args:
+            batch: Preprocessed batch dict with observation.images.*, observation.state,
+                   observation.language.tokens, observation.language.attention_mask.
+
+        Returns:
+            (B,) float tensor of predicted values.
+        """
         logits = self.compute_logits(batch)
         return self.logits_to_value(logits)
 
@@ -376,17 +396,39 @@ class ValueFunction(PreTrainedPolicy):
         return (probs * cast(Tensor, self.bin_centers)).sum(dim=-1)
 
     @staticmethod
-    def returns_to_bins(returns: Tensor, n_bins: int = 50) -> Tensor:
-        """Convert return values in [-1, 0] to one-hot bin targets."""
+    def returns_to_bins(returns: Tensor, n_bins: int = 201) -> Tensor:
+        """Convert return values in [-1, 0] to one-hot bin targets.
+
+        Args:
+            returns: (B,) float tensor of return values in [-1, 0].
+            n_bins: number of discrete bins.
+
+        Returns:
+            One-hot targets: (B, n_bins).
+        """
         returns = returns.clamp(-1.0, 0.0)
+        # Map [-1, 0] → [0, n_bins-1]
         bin_indices = ((returns + 1.0) * (n_bins - 1)).long()
         bin_indices = bin_indices.clamp(0, n_bins - 1)
         return F.one_hot(bin_indices, num_classes=n_bins).float()
 
     def returns_to_hl_gauss(self, returns: Tensor, n_bins: int, sigma: float) -> Tensor:
-        """Convert returns to soft Gaussian targets over bins."""
+        """Convert returns to soft Gaussian targets over bins (HL-Gauss).
+
+        Places a Gaussian centered on the return value and evaluates it at each
+        bin center, then normalizes to a valid distribution.
+
+        Args:
+            returns: (B,) float tensor of return values in [-1, 0].
+            n_bins: number of discrete bins.
+            sigma: standard deviation of the Gaussian kernel.
+
+        Returns:
+            Soft targets: (B, n_bins) summing to 1 per row.
+        """
         returns = returns.clamp(-1.0, 0.0)
-        bin_centers = cast(Tensor, self.bin_centers)
+        bin_centers = cast(Tensor, self.bin_centers)  # (n_bins,)
+        # (B, 1) - (1, n_bins) → (B, n_bins)
         diff = returns.unsqueeze(-1) - bin_centers.unsqueeze(0)
         log_probs = -0.5 * (diff / sigma) ** 2
         return F.softmax(log_probs, dim=-1)

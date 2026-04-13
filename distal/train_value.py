@@ -132,9 +132,11 @@ def main(cfg: TrainValueConfig):
     )
 
     # ── Model & preprocessor ──
-    model = ValueFunction(cfg.value)
-    if cfg.base_policy:
-        model.load_vlm_from_policy(cfg.base_policy)
+    if cfg.value.pretrained_path:
+        model = ValueFunction.from_pretrained(str(cfg.value.pretrained_path))
+        print(f"Loaded pretrained value model from {cfg.value.pretrained_path}")
+    else:
+        model = ValueFunction(cfg.value)
     model = model.to(device)
     preprocessor, _ = make_advantage_pre_post_processors(AdvantageConfig())
 
