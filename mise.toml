@@ -50,6 +50,17 @@ sky launch configs/sky.yaml -y --env HF_TOKEN --env WANDB_API_KEY
 {% endif %}
 """
 
+[tasks.sky-ssh]
+description = "Launch training via SkyPilot using SSH config, or exec on a running cluster if given a cluster ID"
+usage = 'arg "[cluster_id]"'
+run = """
+{% if usage.cluster_id %}
+sky exec {{ usage.cluster_id }} configs/sky-ssh.yaml --env HF_TOKEN --env WANDB_API_KEY
+{% else %}
+sky launch configs/sky-ssh.yaml -y --env HF_TOKEN --env WANDB_API_KEY
+{% endif %}
+"""
+
 [tasks.container]
 description = "Build Singularity container and upload to cluster"
 run = """
