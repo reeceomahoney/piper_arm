@@ -1,17 +1,18 @@
-"""Distributional value function using SigLIP + Gemma backbone.
+"""Distributional value function using PaliGemma (gemma_2b) backbone.
 
-Uses a SigLIP vision encoder for image features and a Gemma language model
-for joint processing of visual tokens and text (task description + discretized
-state). Pi0.5-style architecture: vision features projected and scaled by
-sqrt(embed_dim), state discretized into 256 bins as text, bidirectional
-attention in Gemma. Value extracted from last token hidden state, fed through
-an MLP value head that predicts returns as a categorical distribution over
-discrete bins.
+Builds a PaliGemma model sized to the pi0.5 gemma_2b variant, truncated to the
+first N text layers, and initializes it from `lerobot/pi05_base` weights so the
+VLM features match the base policy. All backbone parameters are frozen except
+the last K text layers. State is discretized into 256 bins and appended to the
+task prompt; bidirectional attention is enabled over the prefix. Value is
+extracted from the last valid token hidden state and fed through an MLP head
+that predicts returns as a categorical distribution over discrete bins.
 """
 
+import logging
 import math
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import torch
 import torch.nn.functional as F
@@ -22,6 +23,7 @@ from lerobot.optim.schedulers import (
     CosineDecayWithWarmupSchedulerConfig,
     LRSchedulerConfig,
 )
+from lerobot.policies.pi05.modeling_pi05 import get_gemma_config
 from lerobot.policies.pi05.processor_pi05 import Pi05PrepareStateTokenizerProcessorStep
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.processor import (
@@ -41,18 +43,77 @@ from lerobot.utils.constants import (
     POLICY_PREPROCESSOR_DEFAULT_NAME,
 )
 from torch import Tensor, nn
-from transformers import Gemma3ForCausalLM, SiglipVisionModel
+from transformers import CONFIG_MAPPING
+from transformers.models.paligemma.modeling_paligemma import (
+    PaliGemmaForConditionalGeneration,
+)
+
+PI05_VLM_KEY_PREFIX = "paligemma_with_expert.paligemma."
+
+
+def load_pretrained_vlm_weights(model: nn.Module, pretrained_path: str) -> None:
+    """Load VLM weights from a pi0.5 checkpoint into `model.paligemma`.
+
+    Subsets `paligemma_with_expert.paligemma.*` keys from the checkpoint's
+    safetensors, strips the outer prefix so keys start with `paligemma.`, and
+    copies `paligemma.lm_head.weight` to the embed_tokens slot if missing.
+    Ported from lerobot PR #3245 `recap_utils.load_pretrained_vlm_weights`.
+    """
+    from safetensors.torch import load_file
+    from transformers.utils import cached_file
+
+    logging.info(f"Loading pretrained VLM weights from {pretrained_path}")
+    resolved_file = cached_file(pretrained_path, "model.safetensors")
+    if resolved_file is None:
+        raise FileNotFoundError(
+            f"Could not find model.safetensors in {pretrained_path}"
+        )
+    full_state_dict = load_file(resolved_file)
+
+    vlm_state_dict: dict[str, Tensor] = {}
+    for key, value in full_state_dict.items():
+        if not key.startswith(PI05_VLM_KEY_PREFIX):
+            continue
+        new_key = key[len("paligemma_with_expert.") :]
+        vlm_state_dict[new_key] = value
+
+    lm_head_key = "paligemma.lm_head.weight"
+    embed_key = "paligemma.model.language_model.embed_tokens.weight"
+    if lm_head_key in vlm_state_dict and embed_key not in vlm_state_dict:
+        vlm_state_dict[embed_key] = vlm_state_dict[lm_head_key].clone()
+
+    missing, unexpected = model.load_state_dict(vlm_state_dict, strict=False)
+    expected_missing = [
+        k for k in missing if k.startswith(("value_head.", "bin_centers"))
+    ]
+    truly_missing = [k for k in missing if k not in expected_missing]
+    loaded_count = len(vlm_state_dict) - len(unexpected)
+    logging.info(
+        f"Pretrained VLM weights: loaded {loaded_count} tensors, "
+        f"{len(expected_missing)} expected-missing (value head), "
+        f"{len(truly_missing)} unexpectedly missing, "
+        f"{len(unexpected)} unexpected."
+    )
+    if truly_missing:
+        logging.warning(f"Unexpectedly missing keys: {truly_missing[:10]}")
+    if unexpected:
+        logging.warning(f"Unexpected keys (not loaded): {unexpected[:10]}")
 
 
 @PreTrainedConfig.register_subclass("value")
 @dataclass
 class ValueConfig(PreTrainedConfig):
-    vision_model_name: str = "google/siglip-base-patch16-224"
-    lm_model_name: str = "google/gemma-3-270m"
-    n_bins: int = 201
-    tokenizer_max_length: int = 48
+    paligemma_variant: str = "gemma_2b"
+    image_size: int = 224
+    num_vlm_layers: int = 10
+    tokenizer_name: str = "google/paligemma-3b-pt-224"
+    tokenizer_max_length: int = 200
     freeze_vision_encoder: bool = True
-    freeze_language_model: bool = True
+    freeze_backbone: bool = True
+    num_unfrozen_backbone_layers: int = 3
+    pretrained_path: str | None = "lerobot/pi05_base"
+    precision: Literal["bfloat16", "float32"] = "bfloat16"
+    n_bins: int = 201
     hl_gauss_sigma: float = 0.0
     value_head_depth: int = 1
     value_head_hidden_dim: int = 768
@@ -130,7 +191,7 @@ def make_value_pre_post_processors(
         ),
         Pi05PrepareStateTokenizerProcessorStep(max_state_dim=32),
         TokenizerProcessorStep(
-            tokenizer_name=config.lm_model_name,
+            tokenizer_name=config.tokenizer_name,
             max_length=config.tokenizer_max_length,
             padding_side="right",
             padding="max_length",
@@ -182,24 +243,47 @@ class ValueFunction(PreTrainedPolicy):
     def __init__(self, config: ValueConfig, **kwargs):
         super().__init__(config)
 
-        # Vision encoder (SigLIP)
-        self.vision_encoder = SiglipVisionModel.from_pretrained(
-            config.vision_model_name
-        )
-        vision_hidden = self.vision_encoder.config.hidden_size
-        self.image_size = self.vision_encoder.config.image_size
+        gemma_cfg = get_gemma_config(config.paligemma_variant)
+        pg_cfg = CONFIG_MAPPING["paligemma"]()
+        pg_cfg._vocab_size = 257152
+        pg_cfg.image_token_index = 257152
+        pg_cfg.text_config.hidden_size = gemma_cfg.width
+        pg_cfg.text_config.intermediate_size = gemma_cfg.mlp_dim
+        pg_cfg.text_config.num_attention_heads = gemma_cfg.num_heads
+        pg_cfg.text_config.num_key_value_heads = gemma_cfg.num_kv_heads
+        pg_cfg.text_config.head_dim = gemma_cfg.head_dim
+        pg_cfg.text_config.num_hidden_layers = gemma_cfg.depth
+        pg_cfg.text_config.hidden_activation = "gelu_pytorch_tanh"
+        pg_cfg.text_config.torch_dtype = "float32"
+        pg_cfg.text_config.vocab_size = 257152
+        pg_cfg.vision_config.image_size = config.image_size
+        pg_cfg.vision_config.intermediate_size = 4304
+        pg_cfg.vision_config.projection_dim = gemma_cfg.width
+        pg_cfg.vision_config.projector_hidden_act = "gelu_fast"
+        pg_cfg.vision_config.torch_dtype = "float32"
 
-        # Language model (Gemma with bidirectional attention)
-        self.language_model = Gemma3ForCausalLM.from_pretrained(
-            config.lm_model_name,
-            torch_dtype=torch.bfloat16,
+        self.paligemma = PaliGemmaForConditionalGeneration(config=pg_cfg)  # ty: ignore[invalid-argument-type]
+        target_dtype = (
+            torch.bfloat16 if config.precision == "bfloat16" else torch.float32
         )
-        self.language_model.model.config.use_bidirectional_attention = True
-        gemma_hidden: int = self.language_model.config.hidden_size  # type: ignore[assignment]
+        self.paligemma = self.paligemma.to(dtype=target_dtype)  # ty: ignore[missing-argument]
 
-        # Vision projection: SigLIP features -> Gemma token dimension
-        self.vision_proj = nn.Linear(vision_hidden, gemma_hidden)
-        self.vision_scale = math.sqrt(gemma_hidden)
+        # Truncate text layers to the first `num_vlm_layers`.
+        lm_inner = self.paligemma.model.language_model
+        if hasattr(lm_inner, "model"):
+            lm_inner = lm_inner.model
+        total_layers = len(lm_inner.layers)
+        if config.num_vlm_layers > total_layers:
+            raise ValueError(
+                f"num_vlm_layers={config.num_vlm_layers} "
+                f"exceeds model depth {total_layers}"
+            )
+        lm_inner.layers = lm_inner.layers[: config.num_vlm_layers]
+
+        # Bidirectional attention over the prefix.
+        self.paligemma.model.language_model.config.use_bidirectional_attention = True
+
+        gemma_hidden: int = gemma_cfg.width
 
         # Value head
         hidden_dim = config.value_head_hidden_dim
@@ -211,14 +295,37 @@ class ValueFunction(PreTrainedPolicy):
         self.bin_centers: Tensor
         self.register_buffer("bin_centers", torch.linspace(-1.0, 0.0, config.n_bins))
 
+        if config.pretrained_path:
+            load_pretrained_vlm_weights(self, config.pretrained_path)
+
         self.set_requires_grad()
 
+    def backbone_text_layers(self) -> nn.ModuleList:
+        lm_inner = self.paligemma.model.language_model
+        if hasattr(lm_inner, "model"):
+            lm_inner = lm_inner.model
+        return lm_inner.layers
+
     def set_requires_grad(self):
-        if self.config.freeze_vision_encoder:
-            for p in self.vision_encoder.parameters():
+        layers = self.backbone_text_layers()
+        if self.config.freeze_backbone:
+            self.paligemma.eval()
+            for p in self.paligemma.parameters():
                 p.requires_grad = False
-        if self.config.freeze_language_model:
-            for p in self.language_model.parameters():
+            if self.config.num_unfrozen_backbone_layers > 0:
+                n = self.config.num_unfrozen_backbone_layers
+                if n > len(layers):
+                    raise ValueError(
+                        f"num_unfrozen_backbone_layers={n} "
+                        f"exceeds available layers {len(layers)}"
+                    )
+                for layer in list(layers)[-n:]:
+                    layer.train()
+                    for p in layer.parameters():
+                        p.requires_grad = True
+        elif self.config.freeze_vision_encoder:
+            self.paligemma.model.vision_tower.eval()
+            for p in self.paligemma.model.vision_tower.parameters():
                 p.requires_grad = False
 
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
@@ -231,21 +338,26 @@ class ValueFunction(PreTrainedPolicy):
 
     def train(self, mode: bool = True):
         super().train(mode)
-        self.vision_encoder.eval()
+        if self.config.freeze_backbone:
+            self.paligemma.eval()
+            if self.config.num_unfrozen_backbone_layers > 0 and mode:
+                n = self.config.num_unfrozen_backbone_layers
+                for layer in list(self.backbone_text_layers())[-n:]:
+                    layer.train()
+        elif self.config.freeze_vision_encoder:
+            self.paligemma.model.vision_tower.eval()
         return self
 
     def prepare_images(self, batch: dict[str, Tensor]) -> list[Tensor]:
-        """Resize, normalize images for SigLIP."""
+        """Resize and normalize images for PaliGemma's SigLIP tower."""
         img_keys = sorted(k for k in batch if k.startswith("observation.images."))
+        size = self.config.image_size
         images = []
         for key in img_keys:
             img = batch[key]
             img = img[:, -1] if img.ndim == 5 else img
             img = F.interpolate(
-                img,
-                size=(self.image_size, self.image_size),
-                mode="bilinear",
-                align_corners=False,
+                img, size=(size, size), mode="bilinear", align_corners=False
             )
             img = img * 2.0 - 1.0  # [0,1] -> [-1,1] for SigLIP
             images.append(img)
@@ -254,9 +366,11 @@ class ValueFunction(PreTrainedPolicy):
     def compute_logits(self, batch: dict[str, Tensor]) -> Tensor:
         """Forward pass returning logits over value bins.
 
-        Encodes images through SigLIP, projects to Gemma dimension, embeds
+        Encodes each camera image through PaliGemma's vision tower (which
+        already projects patch tokens to the Gemma token dimension), embeds
         pre-tokenized text, concatenates, and processes through Gemma with
-        bidirectional attention. Extracts last valid token for value head.
+        bidirectional attention. Extracts the last valid token for the value
+        head.
         """
         images = self.prepare_images(batch)
         lang_tokens = batch[OBS_LANGUAGE_TOKENS]
@@ -264,39 +378,48 @@ class ValueFunction(PreTrainedPolicy):
         device = lang_tokens.device
         bsize = lang_tokens.shape[0]
 
-        # Encode images through SigLIP + projection
+        vlm = self.paligemma.model.language_model
+        param_dtype = next(vlm.parameters()).dtype
+
         all_img_embeds = []
         all_img_masks = []
+        vision_tower = self.paligemma.model.vision_tower
+        projector = self.paligemma.model.multi_modal_projector
         for img in images:
-            with torch.no_grad():
-                vision_out = self.vision_encoder(pixel_values=img)
+            vision_out = vision_tower(pixel_values=img.to(param_dtype))
             patch_embeds = vision_out.last_hidden_state
-            img_emb = self.vision_proj(patch_embeds) * self.vision_scale
+            img_emb = projector(patch_embeds)
+            if img_emb.ndim == 2:
+                img_emb = img_emb.unsqueeze(1)
             all_img_embeds.append(img_emb)
             num_patches = img_emb.shape[1]
             all_img_masks.append(
                 torch.ones(bsize, num_patches, dtype=lang_masks.dtype, device=device)
             )
 
-        # Embed pre-tokenized text
-        text_embeds = self.language_model.model.embed_tokens(lang_tokens)
+        text_embeds = vlm.embed_tokens(lang_tokens)
         text_embeds = text_embeds * math.sqrt(text_embeds.shape[-1])
 
-        # Concatenate: [img1_tokens, img2_tokens, ..., text_tokens]
         combined_embeds = torch.cat(
             [e.to(text_embeds.dtype) for e in all_img_embeds] + [text_embeds], dim=1
         )
         combined_mask = torch.cat(all_img_masks + [lang_masks], dim=1)
 
-        # Forward through Gemma with bidirectional attention
-        outputs = self.language_model.model(
-            inputs_embeds=combined_embeds,
-            attention_mask=combined_mask,
-            output_hidden_states=True,
-        )
-        hidden_states = outputs.last_hidden_state
+        position_ids = torch.cumsum(combined_mask, dim=1) - 1
+        position_ids = position_ids.masked_fill(combined_mask == 0, 0).long()
 
-        # Pool: last valid token per sequence
+        vlm_inputs = {
+            "inputs_embeds": combined_embeds.to(dtype=param_dtype),
+            "attention_mask": combined_mask,
+            "use_cache": False,
+        }
+        try:
+            hidden_states = vlm(
+                **vlm_inputs, position_ids=position_ids
+            ).last_hidden_state
+        except TypeError:
+            hidden_states = vlm(**vlm_inputs).last_hidden_state
+
         seq_lengths = combined_mask.long().sum(dim=1) - 1
         last_hidden = hidden_states[torch.arange(bsize, device=device), seq_lengths]
 
