@@ -50,7 +50,7 @@ class ValueConfig(PreTrainedConfig):
     vision_model_name: str = "google/siglip-base-patch16-224"
     lm_model_name: str = "google/gemma-3-270m"
     n_bins: int = 201
-    tokenizer_max_length: int = 48
+    tokenizer_max_length: int = 64
     freeze_vision_encoder: bool = True
     freeze_language_model: bool = False
     hl_gauss_sigma: float = 0.0
@@ -312,8 +312,8 @@ class ValueFunction(PreTrainedPolicy):
         total = sum(p.numel() for p in self.parameters())
         frozen = total - trainable
         print(
-            f"Value model: {trainable:,} trainable / "
-            f"{total:,} total ({frozen:,} frozen)"
+            f"Value model: {trainable / 1e6:.1f}M trainable / "
+            f"{total / 1e6:.1f}M total ({frozen / 1e6:.1f}M frozen)"
         )
 
     def train(self, mode: bool = True):

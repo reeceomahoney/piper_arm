@@ -42,12 +42,12 @@ class TrainValueConfig:
 
     # Training
     batch_size: int = 32
-    total_steps: int = 30_000
+    total_steps: int = 10_000
 
     # Logging & checkpointing
     log_interval: int = 100
-    plot_interval: int = 1_000
-    save_interval: int = 5_000
+    plot_interval: int = 500
+    save_interval: int = 500
     output_dir: str | None = None
     wandb_project: str | None = "distal-value"
 
@@ -55,6 +55,11 @@ class TrainValueConfig:
     num_workers: int = 4
     seed: int = 42
     use_amp: bool = True
+
+    # Early stopping (save-best + patience). Patience is in units of
+    # log_interval evaluations; set to 0 to disable early stopping.
+    early_stop_patience: int = 10
+    early_stop_min_delta: float = 1e-4
 
 
 @draccus.wrap()
@@ -180,7 +185,14 @@ def main(cfg: TrainValueConfig):
         else nullcontext()
     )
 
+    best_val_mae = float("inf")
+    best_step = 0
+    patience_counter = 0
+    best_dir = output_dir / "checkpoint_best"
+    stop_training = False
+
     for step in range(1, cfg.total_steps + 1):
+        update_start = time.perf_counter()
         dataloading_start = time.perf_counter()
         batch = next(data_iter)
         dataloading_s = time.perf_counter() - dataloading_start
@@ -189,11 +201,13 @@ def main(cfg: TrainValueConfig):
         batch = preprocessor(batch)
         batch["returns"] = returns_tensor[indices]
 
-        update_start = time.perf_counter()
         with autocast:
             loss, info = model(batch)
 
         loss.backward()
+        loss_value = loss.item()
+        mae_value = info["mae"]
+
         torch.nn.utils.clip_grad_norm_(params, optimizer_cfg.grad_clip_norm)
         optimizer.step()
         optimizer.zero_grad()
@@ -221,7 +235,8 @@ def main(cfg: TrainValueConfig):
                     with autocast:
                         val_logits = model.compute_logits(val_batch)
                     val_preds = model.logits_to_value(val_logits)
-                    val_mae_sum += (val_preds - val_batch["returns"]).abs().sum().item()
+                    abs_err = (val_preds - val_batch["returns"]).abs()
+                    val_mae_sum += abs_err.sum().item()
                     val_count += val_preds.shape[0]
 
                     if do_plot:
@@ -241,9 +256,29 @@ def main(cfg: TrainValueConfig):
             val_mae = val_mae_sum / val_count
             model.train()
 
+            if val_mae < best_val_mae - cfg.early_stop_min_delta:
+                best_val_mae = val_mae
+                best_step = step
+                patience_counter = 0
+                model.save_pretrained(best_dir)
+                save_reward_context(best_dir, reward_context, dataset.num_frames)
+                print(f"New best val_mae={val_mae:.4f} at step {step}")
+            else:
+                patience_counter += 1
+
+            if (
+                cfg.early_stop_patience > 0
+                and patience_counter >= cfg.early_stop_patience
+            ):
+                print(
+                    f"Early stopping at step {step}: "
+                    f"best val_mae={best_val_mae:.4f} at step {best_step}"
+                )
+                stop_training = True
+
             log = {
-                "loss": loss.item(),
-                "mae": info["mae"],
+                "loss": loss_value,
+                "mae": mae_value,
                 "val_mae": val_mae,
                 "lr": scheduler.get_last_lr()[0],
                 "update_s": update_s,
@@ -291,21 +326,34 @@ def main(cfg: TrainValueConfig):
             save_reward_context(ckpt_dir, reward_context, dataset.num_frames)
             print(f"Saved checkpoint: {ckpt_dir}")
 
+        if stop_training:
+            break
+
     # Save final checkpoint
     final_dir = output_dir / "checkpoint_final"
     model.save_pretrained(final_dir)
     save_reward_context(final_dir, reward_context, dataset.num_frames)
     print(f"Training complete. Final checkpoint: {final_dir}")
+    if best_step > 0:
+        print(f"Best val_mae={best_val_mae:.4f} at step {best_step} ({best_dir})")
 
-    # Push to hub
+    # Push to hub (prefer best checkpoint if one was saved)
     if cfg.push_to_hub:
         from huggingface_hub import upload_file
 
         from distal.rewards import REWARD_CONTEXT_FILENAME
 
-        model.push_to_hub(cfg.value_repo_id)
+        if best_step > 0:
+            push_model = ValueFunction.from_pretrained(best_dir)
+            push_dir = best_dir
+            print(f"Pushing best checkpoint (step {best_step})")
+        else:
+            push_model = model
+            push_dir = final_dir
 
-        reward_context_path = final_dir / REWARD_CONTEXT_FILENAME
+        push_model.push_to_hub(cfg.value_repo_id)
+
+        reward_context_path = push_dir / REWARD_CONTEXT_FILENAME
         upload_file(
             path_or_fileobj=str(reward_context_path),
             path_in_repo=REWARD_CONTEXT_FILENAME,
