@@ -113,16 +113,16 @@ class ValueConfig(PreTrainedConfig):
     num_unfrozen_backbone_layers: int = 3
     pretrained_path: str | None = "lerobot/pi05_base"
     precision: Literal["bfloat16", "float32"] = "bfloat16"
-    n_bins: int = 201
+    n_bins: int = 50
     hl_gauss_sigma: float = 0.0
     value_head_depth: int = 1
     value_head_hidden_dim: int = 768
 
     # Training presets
     optimizer_lr: float = 1e-4
-    optimizer_betas: tuple[float, float] = (0.9, 0.95)
+    optimizer_betas: tuple[float, float] = (0.9, 0.999)
     optimizer_eps: float = 1e-8
-    optimizer_weight_decay: float = 0.01
+    optimizer_weight_decay: float = 1e-4
     optimizer_grad_clip_norm: float = 1.0
 
     scheduler_warmup_steps: int = 1_000
@@ -281,7 +281,7 @@ class ValueFunction(PreTrainedPolicy):
         lm_inner.layers = lm_inner.layers[: config.num_vlm_layers]
 
         # Bidirectional attention over the prefix.
-        self.paligemma.model.language_model.config.use_bidirectional_attention = True
+        self.paligemma.model.language_model.config.use_bidirectional_attention = False
 
         gemma_hidden: int = gemma_cfg.width
 
@@ -383,18 +383,14 @@ class ValueFunction(PreTrainedPolicy):
 
         all_img_embeds = []
         all_img_masks = []
-        vision_tower = self.paligemma.model.vision_tower
-        projector = self.paligemma.model.multi_modal_projector
         for img in images:
-            vision_out = vision_tower(pixel_values=img.to(param_dtype))
-            patch_embeds = vision_out.last_hidden_state
-            img_emb = projector(patch_embeds)
-            if img_emb.ndim == 2:
-                img_emb = img_emb.unsqueeze(1)
+            image_outputs = self.paligemma.model.get_image_features(img.to(param_dtype))
+            img_emb = image_outputs.pooler_output
             all_img_embeds.append(img_emb)
-            num_patches = img_emb.shape[1]
             all_img_masks.append(
-                torch.ones(bsize, num_patches, dtype=lang_masks.dtype, device=device)
+                torch.ones(
+                    bsize, img_emb.shape[1], dtype=lang_masks.dtype, device=device
+                )
             )
 
         text_embeds = vlm.embed_tokens(lang_tokens)
@@ -465,8 +461,11 @@ class ValueFunction(PreTrainedPolicy):
     def returns_to_bins(returns: Tensor, n_bins: int = 50) -> Tensor:
         """Convert return values in [-1, 0] to one-hot bin targets."""
         returns = returns.clamp(-1.0, 0.0)
-        bin_indices = ((returns + 1.0) * (n_bins - 1)).long()
-        bin_indices = bin_indices.clamp(0, n_bins - 1)
+        bin_edges = torch.linspace(
+            -1.0, 0.0, n_bins + 1, dtype=returns.dtype, device=returns.device
+        )
+        bin_indices = torch.bucketize(returns, bin_edges[1:], right=False)
+        bin_indices = bin_indices.clamp(0, n_bins - 1).long()
         return F.one_hot(bin_indices, num_classes=n_bins).float()
 
     def returns_to_hl_gauss(self, returns: Tensor, n_bins: int, sigma: float) -> Tensor:

@@ -21,11 +21,7 @@ from lerobot.optim.schedulers import CosineDecayWithWarmupSchedulerConfig
 from torch.utils.data import DataLoader, Subset
 
 from distal.rewards import build_reward_context, save_reward_context
-from distal.value_model import (
-    ValueConfig,
-    ValueFunction,
-    make_value_pre_post_processors,
-)
+from distal.value_model import ValueConfig, ValueFunction
 
 
 @dataclass
@@ -42,12 +38,14 @@ class TrainValueConfig:
 
     # Training
     batch_size: int = 32
-    total_steps: int = 30_000
+    total_steps: int = 20_000
 
     # Logging & checkpointing
     log_interval: int = 100
-    plot_interval: int = 1_000
-    save_interval: int = 5_000
+    val_interval: int = 100
+    max_val_batches: int = 20
+    plot_interval: int = 500
+    save_interval: int = 500
     output_dir: str | None = None
     wandb_project: str | None = "distal-value"
 
@@ -140,7 +138,35 @@ def main(cfg: TrainValueConfig):
     # ── Model & preprocessor ──
     model = ValueFunction(cfg.value)
     model = model.to(device)
-    preprocessor, _ = make_value_pre_post_processors(cfg.value)
+
+    # Use pi05's preprocessor so state is QUANTILES-normalized to [-1, 1]
+    # before Pi05PrepareStateTokenizerProcessorStep discretizes it into the
+    # text prompt (matches recap_train_value_network.py:_build_preprocessor).
+    from lerobot.configs.types import FeatureType
+    from lerobot.datasets.feature_utils import dataset_to_policy_features
+    from lerobot.policies.pi05.configuration_pi05 import PI05Config
+    from lerobot.policies.pi05.processor_pi05 import make_pi05_pre_post_processors
+
+    features = dataset_to_policy_features(dataset.meta.features)
+    output_features = {
+        k: f for k, f in features.items() if f.type is FeatureType.ACTION
+    }
+    input_features = {k: f for k, f in features.items() if k not in output_features}
+    policy_cfg = PI05Config(
+        input_features=input_features,
+        output_features=output_features,
+        paligemma_variant=cfg.value.paligemma_variant,
+        device=str(device),
+    )
+    raw_stats = dataset.meta.stats or {}
+    dataset_stats = {
+        k: {sk: torch.as_tensor(sv) for sk, sv in v.items()}
+        for k, v in raw_stats.items()
+    }
+    preprocessor, _ = make_pi05_pre_post_processors(
+        config=policy_cfg,
+        dataset_stats=dataset_stats,
+    )
 
     # ── Optimizer & scheduler ──
     optimizer_cfg = cfg.value.get_optimizer_preset()
@@ -201,20 +227,26 @@ def main(cfg: TrainValueConfig):
         update_s = time.perf_counter() - update_start
 
         # ── Logging ──
-        if step % cfg.log_interval == 0:
+        if step % cfg.val_interval == 0:
             do_plot = bool(cfg.wandb_project) and step % cfg.plot_interval == 0
             plot_ep_data: dict[int, list[tuple[int, float, float]]] = {}
+            plot_ep_ids: list[int] = []
             if do_plot:
-                val_ep_sorted = sorted(val_episodes)
-                n_plot = min(4, len(val_ep_sorted))
-                plot_ep_ids = plot_rng.sample(val_ep_sorted, n_plot)
+                val_window_size = cfg.max_val_batches * cfg.batch_size
+                window_eps = sorted(
+                    {int(episode_index[i]) for i in val_indices[:val_window_size]}
+                )
+                n_plot = min(4, len(window_eps))
+                plot_ep_ids = plot_rng.sample(window_eps, n_plot)
                 plot_ep_data = {ep: [] for ep in plot_ep_ids}
 
             model.eval()
             val_mae_sum = 0.0
             val_count = 0
             with torch.no_grad():
-                for val_batch in val_loader:
+                for val_step, val_batch in enumerate(val_loader):
+                    if val_step >= cfg.max_val_batches:
+                        break
                     val_indices_batch = val_batch["index"].long().to(device)
                     val_batch = preprocessor(val_batch)
                     val_batch["returns"] = returns_tensor[val_indices_batch]
