@@ -1,446 +1,372 @@
-"""Distributional value function using SmolVLM + expert backbone.
+#!/usr/bin/env python
 
-Architecture mirrors SmolVLA's VLM + action expert pattern but replaces noisy-action
-suffix tokens with a single learned value query that cross-attends to the VLM prefix.
-The value head predicts returns as a categorical distribution over discrete bins
-(RECAP-style from pi0.6).
-"""
+# Copyright 2026 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+import logging
 import math
-from dataclasses import dataclass, field
-from typing import cast
+from dataclasses import dataclass
+from importlib import import_module
+from typing import Any, Literal
 
 import torch
-import torch.nn.functional as F
-from lerobot.configs.policies import PreTrainedConfig
-from lerobot.configs.types import NormalizationMode
-from lerobot.optim.optimizers import AdamWConfig, OptimizerConfig
-from lerobot.optim.schedulers import (
-    CosineDecayWithWarmupSchedulerConfig,
-    LRSchedulerConfig,
-)
-from lerobot.policies.pretrained import PreTrainedPolicy
-from lerobot.policies.smolvla.modeling_smolvla import (
-    make_att_2d_masks,
-    pad_tensor,
-    pad_vector,
-    resize_with_pad,
-)
-from lerobot.policies.smolvla.smolvlm_with_expert import SmolVLMWithExpertModel
+import torch.nn as nn
+import torch.nn.functional as F  # noqa: N812
 from lerobot.utils.constants import (
+    OBS_IMAGES,
     OBS_LANGUAGE_ATTENTION_MASK,
     OBS_LANGUAGE_TOKENS,
-    OBS_STATE,
 )
-from torch import Tensor, nn
+from lerobot.utils.import_utils import _transformers_available
+from torch import Tensor
+
+PI05_VLM_KEY_PREFIX = "paligemma_with_expert.paligemma."
 
 
-@PreTrainedConfig.register_subclass("value")
-@dataclass
-class ValueConfig(PreTrainedConfig):
-    vlm_model_name: str = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
-    expert_width_multiplier: float = 0.5
-    resize_imgs_with_padding: tuple[int, int] = (256, 256)
-    max_state_dim: int = 8
-    n_bins: int = 201
-    tokenizer_max_length: int = 48
-    prefix_length: int = -1
-    add_image_special_tokens: bool = False
-    num_vlm_layers: int = 16
-    self_attn_every_n_layers: int = 2
-    freeze_vision_encoder: bool = True
-    train_expert_only: bool = True
-    hl_gauss_sigma: float = 0.0
+def collect_images(batch: dict[str, Any], image_size: int) -> Tensor:
+    """Extract camera images from batch (per-camera or combined format)."""
+    image_keys = sorted(k for k in batch if k.startswith(f"{OBS_IMAGES}."))
+    if image_keys:
+        img_list = []
+        for key in image_keys:
+            img = batch[key]
+            if img.ndim == 5:
+                img = img[:, -1]
+            img_list.append(img)
+        images = torch.stack(img_list, dim=1)
+    elif "observation.images" in batch:
+        images = batch["observation.images"]
+        if images.ndim == 4:
+            images = images.unsqueeze(1)
+    else:
+        raise ValueError("No image keys found in batch")
 
-    # Training presets
-    optimizer_lr: float = 1e-4
-    optimizer_betas: tuple[float, float] = (0.9, 0.95)
-    optimizer_eps: float = 1e-8
-    optimizer_weight_decay: float = 1e-10
-    optimizer_grad_clip_norm: float = 10
+    batch_size, n_cams, C, H, W = images.shape
+    target_h, target_w = image_size, image_size
+    if target_h != H or target_w != W:
+        flat = images.reshape(batch_size * n_cams, C, H, W)
+        flat = F.interpolate(
+            flat, size=(target_h, target_w), mode="bilinear", align_corners=False
+        )
+        images = flat.reshape(batch_size, n_cams, C, target_h, target_w)
+    return images
 
-    scheduler_warmup_steps: int = 1_000
-    scheduler_decay_steps: int = 30_000
-    scheduler_decay_lr: float = 2.5e-6
 
-    normalization_mapping: dict[str, NormalizationMode] = field(
-        default_factory=lambda: {
-            "VISUAL": NormalizationMode.IDENTITY,
-            "STATE": NormalizationMode.IDENTITY,
-        }
+def load_pretrained_vlm_weights(model: nn.Module, pretrained_path: str) -> None:
+    """Load VLM weights from pi0.5 checkpoint into the PaliGemma backbone."""
+    from safetensors.torch import load_file
+    from transformers.utils import cached_file
+
+    logging.info(f"Loading pretrained VLM weights from {pretrained_path}")
+
+    resolved_file = cached_file(pretrained_path, "model.safetensors")
+    if resolved_file is None:
+        raise FileNotFoundError(
+            f"Could not find model.safetensors in {pretrained_path}"
+        )
+    full_state_dict = load_file(resolved_file)
+
+    vlm_state_dict: dict[str, Tensor] = {}
+    for key, value in full_state_dict.items():
+        if not key.startswith(PI05_VLM_KEY_PREFIX):
+            continue
+        new_key = key[len("paligemma_with_expert.") :]
+        vlm_state_dict[new_key] = value
+
+    lm_head_key = "paligemma.lm_head.weight"
+    embed_key = "paligemma.model.language_model.embed_tokens.weight"
+    if lm_head_key in vlm_state_dict and embed_key not in vlm_state_dict:
+        vlm_state_dict[embed_key] = vlm_state_dict[lm_head_key].clone()
+
+    missing, unexpected = model.load_state_dict(vlm_state_dict, strict=False)
+
+    expected_missing = [
+        k for k in missing if k.startswith(("value_head.", "value_bin_support"))
+    ]
+    truly_missing = [k for k in missing if k not in expected_missing]
+
+    loaded_count = len(vlm_state_dict) - len(unexpected)
+    logging.info(
+        f"Pretrained VLM weights: loaded {loaded_count} tensors, "
+        f"{len(expected_missing)} expected-missing (value head), "
+        f"{len(truly_missing)} unexpectedly missing, "
+        f"{len(unexpected)} unexpected."
     )
-
-    @property
-    def observation_delta_indices(self) -> list | None:
-        return None
-
-    @property
-    def action_delta_indices(self) -> list | None:
-        return None
-
-    @property
-    def reward_delta_indices(self) -> list | None:
-        return None
-
-    def get_optimizer_preset(self) -> OptimizerConfig:
-        return AdamWConfig(
-            lr=self.optimizer_lr,
-            weight_decay=self.optimizer_weight_decay,
-            grad_clip_norm=self.optimizer_grad_clip_norm,
-        )
-
-    def get_scheduler_preset(self) -> LRSchedulerConfig:
-        return CosineDecayWithWarmupSchedulerConfig(
-            peak_lr=self.optimizer_lr,
-            decay_lr=self.scheduler_decay_lr,
-            num_warmup_steps=self.scheduler_warmup_steps,
-            num_decay_steps=self.scheduler_decay_steps,
-        )
-
-    def validate_features(self) -> None:
-        pass
+    if truly_missing:
+        logging.warning(f"Unexpectedly missing keys: {truly_missing[:10]}")
+    if unexpected:
+        logging.warning(f"Unexpected keys (not loaded): {unexpected[:10]}")
 
 
-class ValueFunction(PreTrainedPolicy):
-    name = "value"
-    config_class = ValueConfig
-    config: ValueConfig
+if _transformers_available:
+    from transformers import CONFIG_MAPPING
+    from transformers.models.paligemma.modeling_paligemma import (
+        PaliGemmaForConditionalGeneration,
+    )
+else:
+    CONFIG_MAPPING = None
+    PaliGemmaForConditionalGeneration = None
 
-    def __init__(self, config: ValueConfig, **kwargs):
-        super().__init__(config)
 
-        self.vlm_with_expert = SmolVLMWithExpertModel(
-            model_id=config.vlm_model_name,
-            freeze_vision_encoder=config.freeze_vision_encoder,
-            train_expert_only=config.train_expert_only,
-            load_vlm_weights=True,
-            attention_mode="cross_attn",
-            num_vlm_layers=config.num_vlm_layers,
-            self_attn_every_n_layers=config.self_attn_every_n_layers,
-            expert_width_multiplier=config.expert_width_multiplier,
-            device="cpu",
-        )
+def _load_get_gemma_config():
+    try:
+        module = import_module("lerobot.policies.pi05.modeling_pi05")
+    except ModuleNotFoundError:
+        module = import_module("lerobot.policies.pi05_full.modeling_pi05")
+    return module.get_gemma_config
 
-        vlm_hidden = self.vlm_with_expert.config.text_config.hidden_size
-        expert_hidden = self.vlm_with_expert.expert_hidden_size
 
-        # State projection (same as SmolVLA)
-        self.state_proj = nn.Linear(config.max_state_dim, vlm_hidden)
+get_gemma_config = _load_get_gemma_config()
 
-        # Single learnable value query token (replaces noisy-action suffix)
-        self.value_query = nn.Parameter(torch.randn(1, 1, expert_hidden) * 0.02)
 
-        # Value head: expert_hidden → logits over bins
-        self.value_head = nn.Sequential(
-            nn.Linear(expert_hidden, expert_hidden),
-            nn.SiLU(),
-            nn.Linear(expert_hidden, config.n_bins),
-        )
+@dataclass
+class RECAPValueNetworkConfig:
+    """Configuration for the standalone RECAP value network."""
 
-        # Bin centers for computing expected value
-        self.register_buffer("bin_centers", torch.linspace(-1.0, 0.0, config.n_bins))
+    paligemma_variant: str = "gemma_300m"
+    precision: Literal["bfloat16", "float32"] = "float32"
+    image_size: int = 224
+    tokenizer_name: str = "google/paligemma-3b-pt-224"
+    hidden_dim: int = 768
+    num_value_bins: int = 50
+    v_min: float = -1.0
+    v_max: float = 0.0
+    freeze_vision_encoder: bool = False
+    freeze_backbone: bool = False
+    num_unfrozen_backbone_layers: int = 0
+    num_vlm_layers: int = 18
+    value_head_depth: int = 1
+    dropout: float = 0.1
+    pretrained_path: str | None = None
 
-        # Special tokens for image wrapping
-        self.fake_image_token = (
-            self.vlm_with_expert.processor.tokenizer.fake_image_token_id
-        )
-        self.global_image_token = (
-            self.vlm_with_expert.processor.tokenizer.global_image_token_id
-        )
-        self.global_image_start_token = torch.tensor(
-            [self.fake_image_token, self.global_image_token], dtype=torch.long
-        )
-        self.image_end_token = torch.tensor([self.fake_image_token], dtype=torch.long)
-        self.add_image_special_tokens = config.add_image_special_tokens
-        self.prefix_length = config.prefix_length
 
-        self.set_requires_grad()
+class RECAPValueNetwork(nn.Module):
+    value_bin_support: Tensor
 
-    def set_requires_grad(self):
-        """Freeze vision encoder. VLM + expert + heads stay trainable."""
-        vision_model = self.vlm_with_expert.get_vlm_model().vision_model
-        vision_model.eval()
-        for p in vision_model.parameters():
-            p.requires_grad = False
-
-    def train(self, mode: bool = True):
-        super().train(mode)
-        # Keep vision encoder in eval mode
-        self.vlm_with_expert.get_vlm_model().vision_model.eval()
-        return self
-
-    def embed_prefix(
-        self,
-        images: list[Tensor],
-        img_masks: list[Tensor],
-        lang_tokens: Tensor,
-        lang_masks: Tensor,
-        state: Tensor,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        """Embed images, language, and state into prefix tokens.
-
-        Duplicated from VLAFlowMatching.embed_prefix to stay decoupled from the
-        installed lerobot action-policy internals.
-        """
-        embs: list[Tensor] = []
-        pad_masks: list[Tensor] = []
-        att_masks: list[int] = []
-
-        for img, img_mask in zip(images, img_masks, strict=False):
-            if self.add_image_special_tokens:
-                image_start_token = (
-                    self.vlm_with_expert.embed_language_tokens(
-                        self.global_image_start_token.to(
-                            device=self.vlm_with_expert.vlm.device
-                        )
-                    )
-                    .unsqueeze(0)
-                    .expand(img.shape[0], -1, -1)
-                )
-                image_start_mask = torch.ones_like(
-                    image_start_token[:, :, 0],
-                    dtype=torch.bool,
-                    device=image_start_token.device,
-                )
-                att_masks += [0] * image_start_mask.shape[-1]
-                embs.append(image_start_token)
-                pad_masks.append(image_start_mask)
-
-            img_emb = self.vlm_with_expert.embed_image(img)
-            img_emb_dim = img_emb.shape[-1]
-            img_emb = img_emb * torch.tensor(
-                img_emb_dim**0.5, dtype=img_emb.dtype, device=img_emb.device
+    def __init__(self, config: RECAPValueNetworkConfig):
+        super().__init__()
+        if PaliGemmaForConditionalGeneration is None or CONFIG_MAPPING is None:
+            raise ImportError(
+                "transformers is required to instantiate RECAPValueNetwork."
             )
 
-            bsize, num_img_embs = img_emb.shape[:2]
-            img_mask = img_mask[:, None].expand(bsize, num_img_embs)
+        self.config = config
+        gemma_config = get_gemma_config(config.paligemma_variant)
 
-            embs.append(img_emb)
-            pad_masks.append(img_mask)
-            att_masks += [0] * num_img_embs
+        paligemma_config_hf = CONFIG_MAPPING["paligemma"]()
+        paligemma_config_hf._vocab_size = 257152  # noqa: SLF001
+        paligemma_config_hf.image_token_index = 257152
+        paligemma_config_hf.text_config.hidden_size = gemma_config.width
+        paligemma_config_hf.text_config.intermediate_size = gemma_config.mlp_dim
+        paligemma_config_hf.text_config.num_attention_heads = gemma_config.num_heads
+        paligemma_config_hf.text_config.head_dim = gemma_config.head_dim
+        paligemma_config_hf.text_config.num_hidden_layers = gemma_config.depth
+        paligemma_config_hf.text_config.num_key_value_heads = gemma_config.num_kv_heads
+        paligemma_config_hf.text_config.hidden_activation = "gelu_pytorch_tanh"
+        paligemma_config_hf.text_config.torch_dtype = "float32"
+        paligemma_config_hf.text_config.vocab_size = 257152
+        paligemma_config_hf.vision_config.image_size = config.image_size
+        paligemma_config_hf.vision_config.intermediate_size = 4304
+        paligemma_config_hf.vision_config.projection_dim = gemma_config.width
+        paligemma_config_hf.vision_config.projector_hidden_act = "gelu_fast"
+        paligemma_config_hf.vision_config.torch_dtype = "float32"
 
-            if self.add_image_special_tokens:
-                image_end_token = (
-                    self.vlm_with_expert.embed_language_tokens(
-                        self.image_end_token.to(device=self.vlm_with_expert.vlm.device)
+        self.paligemma = PaliGemmaForConditionalGeneration(config=paligemma_config_hf)  # ty: ignore[invalid-argument-type]
+
+        if config.precision == "bfloat16":
+            self.paligemma = self.paligemma.to(dtype=torch.bfloat16)  # ty: ignore[missing-argument]
+        elif config.precision == "float32":
+            self.paligemma = self.paligemma.to(dtype=torch.float32)  # ty: ignore[missing-argument]
+        else:
+            raise ValueError(f"Invalid precision: {config.precision}")
+
+        lm_inner = self.paligemma.model.language_model
+        if hasattr(lm_inner, "model"):
+            lm_inner = lm_inner.model
+        if config.num_vlm_layers > 0:
+            total_layers = len(lm_inner.layers)
+            if config.num_vlm_layers > total_layers:
+                raise ValueError(
+                    f"num_vlm_layers={config.num_vlm_layers} exceeds "
+                    f"model depth {total_layers}"
+                )
+            lm_inner.layers = lm_inner.layers[: config.num_vlm_layers]
+            logging.info(
+                f"Using first {len(lm_inner.layers)} PaliGemma text layers "
+                "for value network"
+            )
+
+        if config.freeze_backbone:
+            self.paligemma.eval()
+            for param in self.paligemma.parameters():
+                param.requires_grad = False
+            if config.num_unfrozen_backbone_layers > 0:
+                num_layers = len(lm_inner.layers)
+                if config.num_unfrozen_backbone_layers > num_layers:
+                    raise ValueError(
+                        "num_unfrozen_backbone_layers="
+                        f"{config.num_unfrozen_backbone_layers} "
+                        f"exceeds available layers {num_layers}"
                     )
-                    .unsqueeze(0)
-                    .expand(img.shape[0], -1, -1)
+                unfrozen_layers = lm_inner.layers[
+                    -config.num_unfrozen_backbone_layers :
+                ]
+                for layer in unfrozen_layers:
+                    layer.train()
+                    for param in layer.parameters():
+                        param.requires_grad = True
+                logging.info(
+                    "Unfreezing last "
+                    f"{config.num_unfrozen_backbone_layers}/{num_layers} "
+                    "backbone transformer layers"
                 )
-                image_end_mask = torch.ones_like(
-                    image_end_token[:, :, 0],
-                    dtype=torch.bool,
-                    device=image_end_token.device,
-                )
-                embs.append(image_end_token)
-                pad_masks.append(image_end_mask)
-                att_masks += [0] * image_end_mask.shape[1]
+        elif config.freeze_vision_encoder:
+            self.paligemma.model.vision_tower.eval()
+            for param in self.paligemma.model.vision_tower.parameters():
+                param.requires_grad = False
 
-        # Language tokens
-        lang_emb = self.vlm_with_expert.embed_language_tokens(lang_tokens)
-        lang_emb_dim = lang_emb.shape[-1]
-        lang_emb = lang_emb * math.sqrt(lang_emb_dim)
-        embs.append(lang_emb)
-        pad_masks.append(lang_masks)
-        att_masks += [0] * lang_emb.shape[1]
-
-        # State
-        state_emb = self.state_proj(state)
-        state_emb = state_emb[:, None, :] if state_emb.ndim == 2 else state_emb
-        embs.append(state_emb)
-        bsize = state_emb.shape[0]
-        device = state_emb.device
-
-        states_seq_len = state_emb.shape[1]
-        state_mask = torch.ones(bsize, states_seq_len, dtype=torch.bool, device=device)
-        pad_masks.append(state_mask)
-        att_masks += [1] * states_seq_len
-
-        embs_cat = torch.cat(embs, dim=1)
-        pad_masks_cat = torch.cat(pad_masks, dim=1)
-        att_masks_t = torch.tensor(
-            att_masks, dtype=torch.bool, device=pad_masks_cat.device
+        self.register_buffer(
+            "value_bin_support",
+            torch.linspace(
+                config.v_min, config.v_max, config.num_value_bins, dtype=torch.float32
+            ),
+            persistent=True,
         )
-        att_masks_t = att_masks_t[None, :]
 
-        # Pad to prefix_length if needed
-        seq_len = pad_masks_cat.shape[1]
-        if self.prefix_length > 0 and seq_len < self.prefix_length:
-            embs_cat = pad_tensor(embs_cat, self.prefix_length, pad_value=0)
-            pad_masks_cat = pad_tensor(pad_masks_cat, self.prefix_length, pad_value=0)
-            att_masks_t = pad_tensor(att_masks_t, self.prefix_length, pad_value=0)
+        # Value head as per Bryson Jones implementation
+        # https://github.com/brysonjones/open-value/blob/main/src/open_value_estimator/value_estimator.py
+        value_head_layers: list[nn.Module] = []
+        for i in range(config.value_head_depth):
+            value_head_layers.append(
+                nn.Linear(
+                    gemma_config.width if i == 0 else config.hidden_dim,
+                    config.hidden_dim,
+                )
+            )
+            value_head_layers.append(nn.GELU())
+        value_head_layers.append(nn.Linear(config.hidden_dim, config.num_value_bins))
+        self.value_head = nn.Sequential(*value_head_layers)
 
-        att_masks_t = att_masks_t.expand(bsize, -1)
-        return embs_cat, pad_masks_cat, att_masks_t
+        if config.pretrained_path:
+            load_pretrained_vlm_weights(self, config.pretrained_path)
 
-    def prepare_images(
-        self, batch: dict[str, Tensor]
-    ) -> tuple[list[Tensor], list[Tensor]]:
-        """Resize, pad, and normalize images for SigLIP."""
-        img_keys = sorted(k for k in batch if k.startswith("observation.images."))
-        images = []
-        img_masks = []
-        for key in img_keys:
-            img = batch[key]
-            img = img[:, -1] if img.ndim == 5 else img
-            w, h = self.config.resize_imgs_with_padding
-            img = resize_with_pad(img, w, h, pad_value=-1)
-            img = img * 2.0 - 1.0
-            images.append(img)
-            mask = torch.ones(img.shape[0], dtype=torch.bool, device=img.device)
-            img_masks.append(mask)
-        return images, img_masks
-
-    def prepare_state(self, batch: dict[str, Tensor]) -> Tensor:
-        """Pad state to max_state_dim."""
-        state = batch[OBS_STATE]
-        state = state[:, -1] if state.ndim > 2 else state
-        return pad_vector(state, self.config.max_state_dim)
-
-    def compute_logits(self, batch: dict[str, Tensor]) -> Tensor:
+    def forward(self, batch: dict[str, Any], images: Tensor) -> dict[str, Tensor]:
         """Forward pass returning logits over value bins.
 
         Args:
-            batch: Preprocessed batch dict with observation.images.*, observation.state,
-                   observation.language.tokens, observation.language.attention_mask.
+            batch: Preprocessed batch with language tokens and attention mask.
+            images: Camera images of shape ``[B, n_cams, C, H, W]``.
 
         Returns:
-            logits: (B, n_bins) — raw logits over bin_centers.
+            Dictionary with value_logits, value_probs and expected_value.
         """
-        images, img_masks = self.prepare_images(batch)
-        state = self.prepare_state(batch)
-        lang_tokens = batch[OBS_LANGUAGE_TOKENS]
-        lang_masks = batch[OBS_LANGUAGE_ATTENTION_MASK]
+        device = next(self.parameters()).device
+        batch_size, n_cams = images.shape[:2]
 
-        # 1. Embed prefix
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
-            images, img_masks, lang_tokens, lang_masks, state
+        # Paligemma SigLIP image encoder
+        flat_images = images.reshape(batch_size * n_cams, *images.shape[2:]).to(device)
+        image_outputs = self.paligemma.model.get_image_features(flat_images)
+        flat_img_emb = image_outputs.pooler_output
+        if flat_img_emb.ndim == 2:
+            flat_img_emb = flat_img_emb.unsqueeze(1)
+        img_token_len = flat_img_emb.shape[1]
+        img_emb = flat_img_emb.reshape(
+            batch_size, n_cams * img_token_len, flat_img_emb.shape[-1]
+        )
+        img_mask = torch.ones(
+            batch_size, img_emb.shape[1], dtype=torch.bool, device=device
         )
 
-        # 2. Build suffix from value query
-        bsize = prefix_embs.shape[0]
-        device = prefix_embs.device
-        suffix_embs = self.value_query.expand(bsize, -1, -1).to(
-            dtype=prefix_embs.dtype, device=device
+        # Language instruction embedding
+        input_ids = batch[OBS_LANGUAGE_TOKENS].to(device)
+        attention_mask = batch[OBS_LANGUAGE_ATTENTION_MASK].to(device)
+        lang_emb = self.paligemma.model.language_model.embed_tokens(input_ids)
+        lang_emb = lang_emb * math.sqrt(lang_emb.shape[-1])
+        text_mask = attention_mask.bool()
+
+        # Concat image + language embeddings
+        full_embs = torch.cat((img_emb, lang_emb), dim=1)
+        full_mask = torch.cat((img_mask, text_mask), dim=1)
+
+        position_ids = torch.cumsum(full_mask, dim=1) - 1
+        position_ids = position_ids.masked_fill(~full_mask, 0).long()
+
+        # Forward pass. The property is called language_model but it is in fact a vlm
+        vlm = self.paligemma.model.language_model
+        text_dtype = next(vlm.parameters()).dtype
+        text_model_inputs = {
+            "inputs_embeds": full_embs.to(dtype=text_dtype),
+            "attention_mask": full_mask,
+            "use_cache": False,
+        }
+        try:
+            text_model_inputs["position_ids"] = position_ids
+            hidden_states = vlm.forward(**text_model_inputs).last_hidden_state
+        except TypeError:
+            text_model_inputs.pop("position_ids", None)
+            hidden_states = vlm.forward(**text_model_inputs).last_hidden_state
+
+        seq_lengths = full_mask.sum(dim=1) - 1
+        last_token_hidden_state = hidden_states[
+            torch.arange(batch_size, device=device), seq_lengths.long()
+        ]
+
+        # Feed last hidden state into the value head
+        value_logits = self.value_head(last_token_hidden_state.float())
+        value_probs = torch.softmax(value_logits, dim=-1)
+        expected_value = (value_probs * self.value_bin_support).sum(
+            dim=-1, keepdim=True
         )
-        suffix_pad_masks = torch.ones(bsize, 1, dtype=torch.bool, device=device)
-        suffix_att_masks = torch.ones(
-            bsize, 1, dtype=prefix_att_masks.dtype, device=device
+
+        return {
+            "value_logits": value_logits,
+            "value_probs": value_probs,
+            "expected_value": expected_value,
+        }
+
+
+# Deprecated compatibility shims for legacy scripts (compute_advantage_labels,
+# rollout_value_viz) that targeted the previous ValueFunction API. Kept as
+# stubs so type-checking passes; will raise at runtime until those scripts are
+# ported to RECAPValueNetwork.
+class ValueConfig:
+    pass
+
+
+class ValueFunction:
+    config: Any
+
+    @classmethod
+    def from_pretrained(cls, *args: Any, **kwargs: Any) -> "ValueFunction":
+        raise NotImplementedError(
+            "ValueFunction has been replaced by RECAPValueNetwork"
         )
 
-        # 3. Concatenate masks and build 2D attention
-        pad_masks_cat = torch.cat([prefix_pad_masks, suffix_pad_masks], dim=1)
-        att_masks_cat = torch.cat([prefix_att_masks, suffix_att_masks], dim=1)
-        att_2d_masks = make_att_2d_masks(pad_masks_cat, att_masks_cat)
-        position_ids = torch.cumsum(pad_masks_cat, dim=1) - 1
+    def to(self, *args: Any, **kwargs: Any) -> "ValueFunction":
+        return self
 
-        # 4. Forward through VLM + expert
-        (_, suffix_out), _ = self.vlm_with_expert.forward(
-            attention_mask=att_2d_masks,
-            position_ids=cast(torch.LongTensor, position_ids),
-            past_key_values=None,
-            inputs_embeds=cast(list[torch.FloatTensor], [prefix_embs, suffix_embs]),
-            use_cache=False,
-            fill_kv_cache=False,
-        )
+    def eval(self) -> "ValueFunction":
+        return self
 
-        # 5. Extract single suffix token → value head
-        suffix_out = suffix_out[:, -1:].to(dtype=torch.float32)
-        logits = self.value_head(suffix_out.squeeze(1))  # (B, n_bins)
-        return logits
+    def predict_value(self, *args: Any, **kwargs: Any) -> Any:
+        raise NotImplementedError
 
-    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
-        """Training forward pass: compute cross-entropy loss over value bins.
+    def push_to_hub(self, *args: Any, **kwargs: Any) -> Any:
+        raise NotImplementedError
 
-        Expects batch to contain a "returns" key with (B,) float tensor in [-1, 0].
-        When hl_gauss_sigma > 0, uses soft Gaussian targets (HL-Gauss) instead of
-        one-hot targets.
 
-        Returns:
-            (loss, {"mae": float})
-        """
-        logits = self.compute_logits(batch)
-        returns = batch["returns"]
-
-        if self.config.hl_gauss_sigma > 0:
-            targets = self.returns_to_hl_gauss(
-                returns, self.config.n_bins, self.config.hl_gauss_sigma
-            )
-        else:
-            targets = self.returns_to_bins(returns, self.config.n_bins)
-
-        loss = F.cross_entropy(logits, targets)
-
-        with torch.no_grad():
-            pred_values = self.logits_to_value(logits)
-            mae = (pred_values - returns).abs().mean().item()
-
-        return loss, {"mae": mae}
-
-    def predict_value(self, batch: dict[str, Tensor]) -> Tensor:
-        """Compute expected value for a batch of observations.
-
-        Args:
-            batch: Preprocessed batch dict with observation.images.*, observation.state,
-                   observation.language.tokens, observation.language.attention_mask.
-
-        Returns:
-            (B,) float tensor of predicted values.
-        """
-        logits = self.compute_logits(batch)
-        return self.logits_to_value(logits)
-
-    def logits_to_value(self, logits: Tensor) -> Tensor:
-        """Expected value from logits via softmax + dot with bin centers."""
-        probs = F.softmax(logits, dim=-1)
-        return (probs * cast(Tensor, self.bin_centers)).sum(dim=-1)
-
-    @staticmethod
-    def returns_to_bins(returns: Tensor, n_bins: int = 201) -> Tensor:
-        """Convert return values in [-1, 0] to one-hot bin targets.
-
-        Args:
-            returns: (B,) float tensor of return values in [-1, 0].
-            n_bins: number of discrete bins.
-
-        Returns:
-            One-hot targets: (B, n_bins).
-        """
-        returns = returns.clamp(-1.0, 0.0)
-        # Map [-1, 0] → [0, n_bins-1]
-        bin_indices = ((returns + 1.0) * (n_bins - 1)).long()
-        bin_indices = bin_indices.clamp(0, n_bins - 1)
-        return F.one_hot(bin_indices, num_classes=n_bins).float()
-
-    def returns_to_hl_gauss(self, returns: Tensor, n_bins: int, sigma: float) -> Tensor:
-        """Convert returns to soft Gaussian targets over bins (HL-Gauss).
-
-        Places a Gaussian centered on the return value and evaluates it at each
-        bin center, then normalizes to a valid distribution.
-
-        Args:
-            returns: (B,) float tensor of return values in [-1, 0].
-            n_bins: number of discrete bins.
-            sigma: standard deviation of the Gaussian kernel.
-
-        Returns:
-            Soft targets: (B, n_bins) summing to 1 per row.
-        """
-        returns = returns.clamp(-1.0, 0.0)
-        bin_centers = cast(Tensor, self.bin_centers)  # (n_bins,)
-        # (B, 1) - (1, n_bins) → (B, n_bins)
-        diff = returns.unsqueeze(-1) - bin_centers.unsqueeze(0)
-        log_probs = -0.5 * (diff / sigma) ** 2
-        return F.softmax(log_probs, dim=-1)
-
-    def select_action(self, batch: dict[str, Tensor], **kwargs) -> Tensor:
-        raise NotImplementedError("ValueFunction does not produce actions.")
-
-    def predict_action_chunk(self, batch: dict[str, Tensor], **kwargs) -> Tensor:
-        raise NotImplementedError("ValueFunction does not produce actions.")
-
-    def reset(self):
-        pass
-
-    def get_optim_params(self) -> dict:
-        return {"params": [p for p in self.parameters() if p.requires_grad]}
+def make_value_pre_post_processors(*args: Any, **kwargs: Any) -> Any:
+    raise NotImplementedError(
+        "make_value_pre_post_processors has been replaced by the RECAP pipeline"
+    )

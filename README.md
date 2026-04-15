@@ -13,7 +13,10 @@ The system implements a multi-stage training pipeline:
 
 1. **Train value function** — Train a distributional value model using
    cross-entropy over discretized return bins. Supports both step-based and
-   Mahalanobis distance-based reward signals.
+   Mahalanobis distance-based reward signals. The code in
+   `distal/train_value.py` and the `RECAPValueNetwork` in
+   `distal/value_model.py` was adapted from the upstream LeRobot RECAP
+   value-network PR (`jv/recap-value-network` branch).
 
 1. **Compute advantage labels** — Use the trained value model to compute n-step
    TD advantages for every frame, then binarize them using per-task percentile
