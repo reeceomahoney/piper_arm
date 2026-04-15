@@ -2,7 +2,7 @@ name: distal-train
 
 resources:
   cloud: vast
-  accelerators: RTXPRO6000WS
+  accelerators: RTX5090
   disk_size: 64
   autostop:
     idle_minutes: 10
@@ -42,5 +42,4 @@ setup: |
 
 run: |
   cd ~/sky_workdir
-  uv run mise run adv-train adv-libero-steps-penalty
-  # uv run distal/compute_advantage_labels.py
+  uv run distal/train_value.py
