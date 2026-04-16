@@ -26,12 +26,7 @@ def push_value(checkpoint_dir: Path, repo_id: str, private: bool):
     preprocessor = PolicyProcessorPipeline.from_pretrained(
         str(checkpoint_dir), config_filename="policy_preprocessor.json"
     )
-    preprocessor.save_pretrained(
-        save_directory=checkpoint_dir,
-        repo_id=repo_id,
-        push_to_hub=True,
-        config_filename="policy_preprocessor.json",
-    )
+    preprocessor.push_to_hub(repo_id)
 
     reward_context_path = checkpoint_dir / REWARD_CONTEXT_FILENAME
     if reward_context_path.exists():

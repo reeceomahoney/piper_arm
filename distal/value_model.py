@@ -18,7 +18,7 @@ import logging
 import math
 from dataclasses import dataclass, field
 from importlib import import_module
-from typing import Any, Literal
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -140,7 +140,7 @@ class RECAPValueConfig(PreTrainedConfig):
     """Configuration for the standalone RECAP value network."""
 
     paligemma_variant: str = "gemma_300m"
-    precision: Literal["bfloat16", "float32"] = "float32"
+    precision: str = "float32"
     image_size: int = 224
     tokenizer_name: str = "google/paligemma-3b-pt-224"
     hidden_dim: int = 768
