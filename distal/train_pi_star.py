@@ -31,6 +31,7 @@ import logging
 import resource
 import time as time_module
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -68,7 +69,6 @@ class RECAPPiStarTrainingConfig:
     """Configuration for RECAP PiStar06 advantage-conditioned Pi0.5 policy training."""
 
     repo_id: str
-    output_dir: str
     value_network_checkpoint: str = ""
     value_network_checkpoint_filename: str = "checkpoints/epoch_0001.pt"
     value_network_pretrained_path: str | None = None
@@ -78,7 +78,7 @@ class RECAPPiStarTrainingConfig:
     episodes: list[int] | None = None
 
     epochs: int = 5
-    batch_size: int = 6
+    batch_size: int = 8
     num_workers: int = 0
     learning_rate: float = 1e-4
     weight_decay: float = 1e-4
@@ -89,7 +89,7 @@ class RECAPPiStarTrainingConfig:
     max_train_steps_per_epoch: int | None = None
     max_val_steps_per_epoch: int | None = None
     log_every_n_steps: int = 10
-    validate_every_n_train_steps: int = 0
+    validate_every_n_train_steps: int = 1000
     max_val_steps_per_step_validation: int | None = 50
 
     # Master switch: set to False to train vanilla Pi0.5 without advantage
@@ -98,7 +98,7 @@ class RECAPPiStarTrainingConfig:
 
     # RECAP advantage conditioning
     c_fail: float = 500.0
-    num_value_bins: int = 56
+    num_value_bins: int = 50
     # Per-frame advantage threshold: only frames with advantage > threshold get
     # "Advantage: positive" text.  The paper (Appendix A.4) sets this to a
     # per-task percentile so that ~30% of frames are positive during pre-training
@@ -114,13 +114,13 @@ class RECAPPiStarTrainingConfig:
     paligemma_variant: str = "gemma_2b"
     action_expert_variant: str = "gemma_300m"
     num_expert_layers: int = 0
-    pretrained_path: str = "lerobot/pi05_base"
+    pretrained_path: str = "lerobot/pi05_libero_base"
     model_precision: str = "bfloat16"
     freeze_vision_encoder: bool = True
     freeze_backbone: bool = True
     num_unfrozen_backbone_layers: int = 3
     train_expert_only: bool = False
-    gradient_checkpointing: bool = False
+    gradient_checkpointing: bool = True
     gradient_accumulation_steps: int = 1
 
     # Value network pre-computation
@@ -881,7 +881,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     )
     base._set_seed(cfg.seed)
 
-    output_dir = Path(cfg.output_dir)
+    output_dir = Path("outputs/pistar") / datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
     checkpoints_dir = output_dir / "checkpoints"
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
     base._save_json(output_dir / "train_config.json", asdict(cfg))
