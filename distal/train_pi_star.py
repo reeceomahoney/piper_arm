@@ -30,18 +30,23 @@ import json
 import logging
 import resource
 import time as time_module
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
 from lerobot.configs import parser
+from lerobot.configs.default import EvalConfig
 from lerobot.configs.types import FeatureType
 from lerobot.datasets.factory import resolve_delta_timestamps
 from lerobot.datasets.feature_utils import dataset_to_policy_features
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.sampler import EpisodeAwareSampler
+from lerobot.envs.configs import EnvConfig, LiberoEnv
+from lerobot.envs.factory import make_env, make_env_pre_post_processors
+from lerobot.envs.utils import close_envs
+from lerobot.scripts.lerobot_eval import eval_policy_all
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE_TOKENS
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
@@ -128,6 +133,22 @@ class RECAPPiStarTrainingConfig:
 
     # Advantage caching (skip re-computation on subsequent runs)
     advantage_cache_path: str | None = None
+
+    # Sim eval (defaults mirror configs/eval.yaml)
+    env: EnvConfig | None = field(
+        default_factory=lambda: LiberoEnv(
+            task="libero_10",
+            fps=20,
+            observation_height=256,
+            observation_width=256,
+        )
+    )
+    eval: EvalConfig = field(
+        default_factory=lambda: EvalConfig(n_episodes=20, batch_size=0)
+    )
+    eval_freq_steps: int = 0
+    use_async_envs: bool = True
+    max_parallel_tasks: int = 1
 
     # Weights & Biases (optional; set wandb_project to enable)
     wandb_project: str | None = None
@@ -868,6 +889,58 @@ def _log_val_metrics(tag: str, metrics: dict[str, float]) -> None:
     )
 
 
+def _run_sim_eval(
+    *,
+    policy,
+    eval_env,
+    env_preprocessor,
+    env_postprocessor,
+    preprocessor,
+    postprocessor,
+    cfg: RECAPPiStarTrainingConfig,
+    step: int,
+    output_dir: Path,
+    wandb_run=None,
+) -> dict[str, float]:
+    """Roll out the policy in sim, log videos to W&B, return overall metrics."""
+    logging.info(f"Running sim eval at global_step={step}")
+    policy.eval()
+    with torch.no_grad():
+        eval_info = eval_policy_all(
+            envs=eval_env,
+            policy=policy,
+            env_preprocessor=env_preprocessor,
+            env_postprocessor=env_postprocessor,
+            preprocessor=preprocessor,
+            postprocessor=postprocessor,
+            n_episodes=cfg.eval.n_episodes,
+            videos_dir=output_dir / "eval" / f"videos_step_{step}",
+            max_episodes_rendered=4,
+            start_seed=cfg.seed,
+            max_parallel_tasks=cfg.max_parallel_tasks,
+        )
+    aggregated = eval_info["overall"]
+    for suite, suite_info in eval_info.items():
+        logging.info(f"Suite {suite} aggregated: {suite_info}")
+
+    if wandb_run is not None:
+        import wandb
+
+        fps = getattr(cfg.env, "fps", 30) if cfg.env is not None else 30
+        video_paths = aggregated.get("video_paths") or []
+        if video_paths:
+            wandb_run.log(
+                {"eval/video": wandb.Video(str(video_paths[0]), fps=fps, format="mp4")},
+                step=step,
+            )
+
+    return {
+        "eval_s": aggregated.get("eval_s", 0.0),
+        "avg_sum_reward": aggregated.get("avg_sum_reward", 0.0),
+        "pc_success": aggregated.get("pc_success", 0.0),
+    }
+
+
 # ── Main training loop ───────────────────────────────────────────────────────
 
 
@@ -1110,10 +1183,25 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
 
     from lerobot.policies.pi05.processor_pi05 import make_pi05_pre_post_processors
 
-    preprocessor, _postprocessor = make_pi05_pre_post_processors(
+    preprocessor, postprocessor = make_pi05_pre_post_processors(
         config=policy_cfg,
         dataset_stats=train_dataset.meta.stats,  # ty: ignore[invalid-argument-type]
     )
+
+    eval_env = None
+    env_preprocessor = None
+    env_postprocessor = None
+    if cfg.env is not None and cfg.eval_freq_steps > 0:
+        logging.info("Creating sim eval env")
+        eval_env = make_env(
+            cfg.env,
+            n_envs=cfg.eval.batch_size,
+            use_async_envs=cfg.use_async_envs,
+        )
+        env_preprocessor, env_postprocessor = make_env_pre_post_processors(
+            env_cfg=cfg.env,
+            policy_cfg=policy_cfg,
+        )
 
     # ── 6. Create dataloaders ────────────────────────────────────────────
     train_sampler = None
@@ -1301,6 +1389,30 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
                 policy.train()
                 _restore_freeze_state(policy, cfg)
 
+            # Step-based sim eval
+            if (
+                eval_env is not None
+                and cfg.eval_freq_steps > 0
+                and global_train_step % cfg.eval_freq_steps == 0
+            ):
+                eval_metrics = _run_sim_eval(
+                    policy=policy,
+                    eval_env=eval_env,
+                    env_preprocessor=env_preprocessor,
+                    env_postprocessor=env_postprocessor,
+                    preprocessor=preprocessor,
+                    postprocessor=postprocessor,
+                    cfg=cfg,
+                    step=global_train_step,
+                    output_dir=output_dir,
+                    wandb_run=wandb_run,
+                )
+                wandb_step_metrics.update(
+                    {f"eval/{k}": v for k, v in eval_metrics.items()}
+                )
+                policy.train()
+                _restore_freeze_state(policy, cfg)
+
             if wandb_run is not None and wandb_step_metrics:
                 wandb_run.log(wandb_step_metrics, step=global_train_step)
 
@@ -1405,6 +1517,9 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     logging.info(
         f"Training complete. Best val conditioning accuracy: {best_val_cond_acc:.4f}"
     )
+
+    if eval_env is not None:
+        close_envs(eval_env)
 
     # ── 9. Export in HuggingFace pretrained format for inference ──────────
     pretrained_dir = output_dir / "pretrained"
