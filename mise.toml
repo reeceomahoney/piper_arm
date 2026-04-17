@@ -23,7 +23,8 @@ lerobot-train --config_path configs/advantage_train.yaml \
 description = "Evaluate policy in LIBERO sim"
 run = """
 lerobot-eval --config_path configs/eval.yaml \
-  --policy.path=reece-omahoney/adv-libero-base-fixed
+  --policy.path=lerobot/pi05-libero \
+  --policy.n_action_steps=10
 """
 
 # Hardware

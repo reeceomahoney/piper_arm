@@ -44,11 +44,11 @@ def auto_n_envs(n_episodes: int) -> int:
 
 @dataclass
 class EvalDistConfig:
-    policy_path: str = "reece-omahoney/adv-libero-base"
+    policy_path: str = "lerobot/pi05-libero"
     base_dataset_repo_id: str = "lerobot/libero"
     n_episodes: int = 50
-    n_envs: int = 0  # 0 = auto-scale based on CPU cores and n_episodes
-    dataset_repo_id: str = "reece-omahoney/libero-10"
+    n_envs: int = 10  # 0 = auto-scale based on CPU cores and n_episodes
+    dataset_repo_id: str = "reece-omahoney/pi05-libero-10"
     device: str = "cuda"
     max_tasks: int | None = None  # limit number of tasks (None = all)
     seed: int = 0
@@ -103,10 +103,13 @@ def main(cfg: EvalDistConfig):
 
     # ── Load policy ──
     suite_name = "libero_10"
-    env_cfg = LiberoEnvConfig(suite_name, fps=10)
+    env_cfg = LiberoEnvConfig(
+        suite_name, fps=10, observation_height=265, observation_width=265
+    )
     policy_cfg = PreTrainedConfig.from_pretrained(cfg.policy_path)
     policy_cfg.pretrained_path = Path(cfg.policy_path)
     policy_cfg.device = str(device)
+    policy_cfg.n_action_steps = 10  # ty: ignore[unresolved-attribute]
 
     policy = make_policy(cfg=policy_cfg, env_cfg=env_cfg)
     assert isinstance(policy, (PI05Policy, SmolVLAPolicy))
@@ -124,6 +127,12 @@ def main(cfg: EvalDistConfig):
     dataset = None
     features = base_meta.features.copy()
     features["success"] = {"dtype": "bool", "shape": (1,), "names": None}
+    for key, feat in features.items():
+        if key.startswith("observation.images.") and len(feat["shape"]) == 3:
+            features[key] = {
+                **feat,
+                "shape": (env_cfg.observation_height, env_cfg.observation_width, 3),
+            }
     dataset = LeRobotDataset.create(
         repo_id=cfg.dataset_repo_id,
         fps=int(base_meta.fps),
@@ -147,7 +156,13 @@ def main(cfg: EvalDistConfig):
     try:
         with torch.no_grad(), amp_ctx:
             for task_id in range(n_tasks):
-                task_env_cfg = LiberoEnvConfig(suite_name, fps=10, task_ids=[task_id])
+                task_env_cfg = LiberoEnvConfig(
+                    suite_name,
+                    fps=10,
+                    task_ids=[task_id],
+                    observation_height=265,
+                    observation_width=265,
+                )
                 task_envs = make_env(task_env_cfg, n_envs=n_envs, use_async_envs=True)
                 vec_env = task_envs[suite_name][task_id]
                 task_desc = vec_env.call("task_description")[0]  # ty: ignore[unresolved-attribute]
