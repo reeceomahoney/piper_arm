@@ -15,7 +15,6 @@
 # limitations under the License.
 
 import logging
-import math
 from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any
@@ -357,7 +356,6 @@ class RECAPValueNetwork(PreTrainedPolicy):
         input_ids = batch[OBS_LANGUAGE_TOKENS].to(device)
         attention_mask = batch[OBS_LANGUAGE_ATTENTION_MASK].to(device)
         lang_emb = self.paligemma.model.language_model.embed_tokens(input_ids)
-        lang_emb = lang_emb * math.sqrt(lang_emb.shape[-1])
         text_mask = attention_mask.bool()
 
         # Concat image + language embeddings

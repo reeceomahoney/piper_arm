@@ -826,10 +826,7 @@ class PaliGemmaWithExpertModel(nn.Module):
         if image.dtype != torch.float32:
             image = image.to(torch.float32)
         image_outputs = self.paligemma.model.get_image_features(image)  # ty:ignore[invalid-argument-type]
-        features = (
-            image_outputs.pooler_output
-            * self.paligemma.config.text_config.hidden_size**0.5
-        )
+        features = image_outputs.pooler_output
         if features.dtype != out_dtype:
             features = features.to(out_dtype)
         return features
@@ -1082,9 +1079,7 @@ class PiStar06Pytorch(nn.Module):
             att_masks += [0] * num_img_embs
 
         def lang_embed_func(tokens):
-            lang_emb = self.paligemma_with_expert.embed_language_tokens(tokens)
-            lang_emb_dim = lang_emb.shape[-1]
-            return lang_emb * math.sqrt(lang_emb_dim)
+            return self.paligemma_with_expert.embed_language_tokens(tokens)
 
         lang_emb = self._apply_checkpoint(lang_embed_func, tokens)
         embs.append(lang_emb)
