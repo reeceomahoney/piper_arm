@@ -4,6 +4,7 @@ Rolls out the policy in LIBERO, recording observations, actions, and
 per-episode success into a LeRobot dataset.
 """
 
+import math
 import multiprocessing
 import os
 
@@ -34,12 +35,19 @@ from libero.libero import benchmark
 multiprocessing.set_start_method("spawn", force=True)
 
 
+def auto_n_envs(n_episodes: int) -> int:
+    """Pick n_envs based on CPU cores, capped by n_episodes."""
+    cpu_cores = os.cpu_count() or 4
+    by_cpu = max(1, math.floor(cpu_cores * 0.7))
+    return min(by_cpu, n_episodes, 64)
+
+
 @dataclass
 class EvalDistConfig:
     policy_path: str = "reece-omahoney/adv-libero-base"
     base_dataset_repo_id: str = "lerobot/libero"
     n_episodes: int = 50
-    n_envs: int = 5
+    n_envs: int = 0  # 0 = auto-scale based on CPU cores and n_episodes
     dataset_repo_id: str = "reece-omahoney/libero-10"
     device: str = "cuda"
     max_tasks: int | None = None  # limit number of tasks (None = all)
@@ -90,6 +98,9 @@ def main(cfg: EvalDistConfig):
     torch.backends.cuda.matmul.allow_tf32 = True
     set_seed(cfg.seed)
 
+    n_envs = cfg.n_envs if cfg.n_envs > 0 else auto_n_envs(cfg.n_episodes)
+    print(f"Using n_envs={n_envs} (requested={cfg.n_envs})")
+
     # ── Load policy ──
     suite_name = "libero_10"
     env_cfg = LiberoEnvConfig(suite_name, fps=10)
@@ -137,7 +148,7 @@ def main(cfg: EvalDistConfig):
         with torch.no_grad(), amp_ctx:
             for task_id in range(n_tasks):
                 task_env_cfg = LiberoEnvConfig(suite_name, fps=10, task_ids=[task_id])
-                task_envs = make_env(task_env_cfg, n_envs=cfg.n_envs)
+                task_envs = make_env(task_env_cfg, n_envs=n_envs)
                 vec_env = task_envs[suite_name][task_id]
                 task_desc = vec_env.call("task_description")[0]  # ty: ignore[unresolved-attribute]
                 print(f"\nTask {task_id + 1}/{n_tasks}: {task_desc}")
