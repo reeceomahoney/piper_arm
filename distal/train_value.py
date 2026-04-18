@@ -1141,7 +1141,7 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
     step_val_loader = DataLoader(
         val_dataset,
         batch_size=cfg.batch_size,
-        shuffle=False,
+        shuffle=True,
         num_workers=0,
         pin_memory=(device.type == "cuda"),
         drop_last=False,
