@@ -84,9 +84,9 @@ class RECAPPiStarTrainingConfig:
     episodes: list[int] | None = None
 
     epochs: int = 5
-    batch_size: int = 16
+    batch_size: int = 64
     num_workers: int = 4
-    learning_rate: float = 1e-4
+    learning_rate: float = 2e-4
     weight_decay: float = 1e-4
     max_grad_norm: float = 1.0
     val_split_ratio: float = 0.1
@@ -130,7 +130,7 @@ class RECAPPiStarTrainingConfig:
     gradient_accumulation_steps: int = 1
 
     # Value network pre-computation
-    vn_batch_size: int = 4
+    vn_batch_size: int = 640
 
     # Advantage caching (skip re-computation on subsequent runs)
     advantage_cache_path: str | None = None
@@ -262,6 +262,12 @@ def _load_value_network_from_pretrained(path_or_repo_id: str) -> "RECAPValueNetw
     model = RECAPValueNetwork(config)
     weights_path = _resolve_pretrained_file(path_or_repo_id, "model.safetensors")
     state_dict = load_file(weights_path)
+
+    lm_head_key = "paligemma.lm_head.weight"
+    embed_key = "paligemma.model.language_model.embed_tokens.weight"
+    if lm_head_key in state_dict and embed_key not in state_dict:
+        state_dict[embed_key] = state_dict[lm_head_key].clone()
+
     model.load_state_dict(state_dict)
     logging.info(
         f"Loaded value network from pretrained path '{path_or_repo_id}': "
@@ -430,7 +436,7 @@ def _precompute_advantages(
     loaded from a pretrained HF repo), or loaded from a legacy ``.pt``
     checkpoint via ``value_network_checkpoint``.
     """
-    from distal.value_model import RECAPValueConfig, RECAPValueNetwork, collect_images
+    from distal.value_model import RECAPValueConfig, RECAPValueNetwork
 
     preprocessor = _make_vn_preprocessor(policy_cfg, full_dataset.meta.stats)
 
@@ -460,7 +466,6 @@ def _precompute_advantages(
     )
     _log_memory("post-VN-load")
 
-    full_dataset._ensure_hf_dataset_loaded()  # ty:ignore[unresolved-attribute]
     R_t_by_abs_index: dict[int, float] = {}
     for ft in frame_targets:
         abs_idx = int(full_dataset.hf_dataset[ft.frame_index]["index"])
@@ -484,8 +489,7 @@ def _precompute_advantages(
         B = abs_indices.shape[0]
 
         batch = preprocessor(batch)
-        images = collect_images(batch, vn.config.image_size)
-        outputs = vn(batch, images)
+        outputs = vn.compute_outputs(batch)
         V_t = outputs["expected_value"].squeeze(-1).cpu()
 
         for i in range(B):
