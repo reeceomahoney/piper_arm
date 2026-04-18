@@ -76,18 +76,23 @@ def compute_maha_rewards(
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    d_min = float(distances.min())
-    d_max = float(distances.max())
-    if d_max <= d_min:
+    p1 = float(np.percentile(distances, 1))
+    p99 = float(np.percentile(distances, 99))
+    if p99 <= p1:
         logging.warning(
-            f"Degenerate maha distances (min={d_min}, max={d_max}); returning zeros."
+            f"Degenerate maha distances (p1={p1}, p99={p99}); returning zeros."
         )
         normalized = np.zeros_like(distances)
     else:
-        normalized = -(distances - d_min) / (d_max - d_min)
+        clipped = np.clip(distances, p1, p99)
+        normalized = -(clipped - p1) / (p99 - p1)
+        mean_reward = float(normalized.mean())
+        if mean_reward < 0:
+            normalized = normalized * (-1.0 / mean_reward)
 
     logging.info(
-        f"Maha rewards: raw d in [{d_min:.4f}, {d_max:.4f}] -> "
+        f"Maha rewards: raw d in [{float(distances.min()):.4f}, "
+        f"{float(distances.max()):.4f}], clip [p1={p1:.4f}, p99={p99:.4f}] -> "
         f"normalized in [{normalized.min():.4f}, {normalized.max():.4f}] "
         f"(mean={normalized.mean():.4f})"
     )

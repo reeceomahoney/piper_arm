@@ -314,6 +314,10 @@ def _build_frame_targets(
             f"{missing_episode_labels[:20]}"
         )
 
+    # In maha mode (step_rewards provided), the terminal failure penalty is 0
+    # since the per-step Mahalanobis rewards already encode OOD signal.
+    effective_c_fail = 0.0 if step_rewards is not None else float(c_fail)
+
     frame_targets: list[FrameTarget] = []
     for ep_idx, info in episode_infos.items():
         success = bool(success_by_episode[ep_idx])
@@ -327,7 +331,7 @@ def _build_frame_targets(
                 ],
                 dtype=torch.float32,
             )
-        rewards[-1] = 0.0 if success else -float(c_fail)
+        rewards[-1] = 0.0 if success else -effective_c_fail
 
         returns = torch.flip(
             torch.cumsum(torch.flip(rewards, dims=[0]), dim=0), dims=[0]
