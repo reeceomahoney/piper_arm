@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import builtins
 import copy
-import csv
 import logging
 import math
 import resource
@@ -1371,7 +1370,6 @@ class PiStar06Policy(PreTrainedPolicy):
     def __init__(
         self,
         config: PiStar06Config,
-        dataset_meta=None,
         **kwargs,
     ):
         super().__init__(config)
@@ -1403,11 +1401,6 @@ class PiStar06Policy(PreTrainedPolicy):
             )
 
         self._setup_advantage_tokens()
-
-        self._episode_info: dict[int, dict] | None = None
-        self._task_max_len: dict[str, int] | None = None
-        if dataset_meta is not None and config.episode_labels_path is not None:
-            self._setup_episode_metadata(dataset_meta, config.episode_labels_path)
 
         self._train_step_count = 0
         self.reset()
@@ -1731,44 +1724,6 @@ class PiStar06Policy(PreTrainedPolicy):
             masks[i, content_len : content_len + n_adv] = 1
 
         return tokens, masks
-
-    # ── Episode metadata ─────────────────────────────────────────────────
-
-    def _setup_episode_metadata(self, dataset_meta, labels_path: str) -> None:
-        """Load episode labels and build per-episode metadata."""
-        success_map: dict[int, bool] = {}
-        with open(labels_path) as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                success_map[int(row["episode_index"])] = bool(int(row["success"]))
-
-        episodes = dataset_meta.episodes
-        episode_info: dict[int, dict] = {}
-        task_max_len: dict[str, int] = {}
-
-        for i in range(len(episodes)):
-            ep = episodes[i]
-            ep_idx = ep["episode_index"]
-            ep_len = ep["length"]
-            ep_tasks = ep["tasks"] if isinstance(ep["tasks"], list) else [ep["tasks"]]
-            task = ep_tasks[0] if ep_tasks else "unknown"
-
-            if ep_idx in success_map:
-                episode_info[ep_idx] = {
-                    "length": ep_len,
-                    "success": success_map[ep_idx],
-                    "task": task,
-                    "dataset_from_index": ep["dataset_from_index"],
-                }
-                if task not in task_max_len or ep_len > task_max_len[task]:
-                    task_max_len[task] = ep_len
-
-        self._episode_info = episode_info
-        self._task_max_len = task_max_len
-        logging.info(
-            f"Episode metadata loaded: {len(episode_info)} episodes, "
-            f"{sum(1 for v in episode_info.values() if v['success'])} successful"
-        )
 
     # ── Advantage computation ────────────────────────────────────────────
 

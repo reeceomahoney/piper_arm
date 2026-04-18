@@ -77,7 +77,6 @@ class RECAPPiStarTrainingConfig:
     value_network_checkpoint: str = ""
     value_network_checkpoint_filename: str = "checkpoints/epoch_0001.pt"
     value_network_pretrained_path: str | None = None
-    episode_labels_path: str | None = None
     root: str | None = None
     revision: str | None = None
     episodes: list[int] | None = None
@@ -282,58 +281,9 @@ def _load_vn_train_config_from_pretrained(path_or_repo_id: str) -> dict:
     return train_cfg
 
 
-def _resolve_labels_csv(cfg: RECAPPiStarTrainingConfig) -> Path:
-    """Resolve the episode labels CSV path, reusing the value-network logic."""
-    if cfg.episode_labels_path is not None:
-        resolved = Path(cfg.episode_labels_path).expanduser()
-        if not resolved.is_file():
-            raise FileNotFoundError(
-                f"Provided --episode_labels_path does not exist: {resolved}"
-            )
-        return resolved
-
-    from lerobot.datasets.lerobot_dataset import (
-        HF_LEROBOT_HOME,  # ty:ignore[unresolved-import]
-    )
-
-    dataset_root = (
-        Path(cfg.root) / cfg.repo_id if cfg.root else HF_LEROBOT_HOME / cfg.repo_id
-    )
-    default_path = dataset_root / "meta" / "episode_labels.csv"
-    if default_path.is_file():
-        return default_path
-
-    try:
-        from huggingface_hub import hf_hub_download
-
-        logging.info(
-            f"Episode labels not found locally at {default_path}; "
-            f"attempting to download from {cfg.repo_id} ..."
-        )
-        hf_hub_download(
-            repo_id=cfg.repo_id,
-            filename="meta/episode_labels.csv",
-            repo_type="dataset",
-            revision=cfg.revision,
-            local_dir=str(dataset_root),
-        )
-    except Exception:  # noqa: BLE001
-        pass
-
-    if default_path.is_file():
-        return default_path
-
-    raise FileNotFoundError(
-        f"No episode labels CSV found at {default_path}\n"
-        "Either push meta/episode_labels.csv to your dataset or pass "
-        "--episode_labels_path."
-    )
-
-
 def _build_policy_config(
     cfg: RECAPPiStarTrainingConfig,
     train_dataset: LeRobotDataset,
-    labels_csv_path: Path,
 ):
     """Build a PiStar06Config from the training config and dataset metadata."""
     from distal.pistar06.configuration_pistar06 import PiStar06Config
@@ -356,7 +306,6 @@ def _build_policy_config(
         freeze_vision_encoder=cfg.freeze_vision_encoder,
         train_expert_only=cfg.train_expert_only,
         gradient_checkpointing=cfg.gradient_checkpointing,
-        episode_labels_path=str(labels_csv_path),
         c_fail=cfg.c_fail,
         advantage_threshold=cfg.advantage_threshold,
         advantage_dropout=cfg.advantage_dropout,
@@ -682,6 +631,7 @@ def _run_validation(
     loader: DataLoader,
     preprocessor,
     advantage_lookup: dict[int, float],
+    success_by_episode: dict[int, int],
     device: torch.device,
     max_steps: int | None = None,
 ) -> dict[str, float]:
@@ -693,7 +643,6 @@ def _run_validation(
     Both passes share identical noise and flow time for fair comparison.
     """
     policy.eval()
-    has_episode_info = policy._episode_info is not None
 
     total_loss = 0.0
     total_loss_pos = 0.0
@@ -746,27 +695,26 @@ def _run_validation(
 
         B = batch[OBS_LANGUAGE_TOKENS].shape[0]
 
-        if has_episode_info:
-            ep_indices = batch["episode_index"]
-            episode_success = torch.tensor(
-                [policy._episode_info[int(idx)]["success"] for idx in ep_indices],
-                device=device,
-                dtype=torch.bool,
-            )
-            adv_positive = advantages > policy.config.advantage_threshold
-            aligned = (adv_positive == episode_success).float()
-            total_aligned += aligned.sum().item()
+        ep_indices = batch["episode_index"]
+        episode_success = torch.tensor(
+            [success_by_episode[int(idx)] for idx in ep_indices],
+            device=device,
+            dtype=torch.bool,
+        )
+        adv_positive = advantages > policy.config.advantage_threshold
+        aligned = (adv_positive == episode_success).float()
+        total_aligned += aligned.sum().item()
 
-            success_mask = episode_success
-            failure_mask = ~episode_success
-            n_success = success_mask.sum().item()
-            n_failure = failure_mask.sum().item()
-            total_success_samples += n_success
-            total_failure_samples += n_failure
-            if n_success > 0:
-                total_aligned_success += aligned[success_mask].sum().item()
-            if n_failure > 0:
-                total_aligned_failure += aligned[failure_mask].sum().item()
+        success_mask = episode_success
+        failure_mask = ~episode_success
+        n_success = success_mask.sum().item()
+        n_failure = failure_mask.sum().item()
+        total_success_samples += n_success
+        total_failure_samples += n_failure
+        if n_success > 0:
+            total_aligned_success += aligned[success_mask].sum().item()
+        if n_failure > 0:
+            total_aligned_failure += aligned[failure_mask].sum().item()
 
         padded_actions = policy.prepare_action(batch)
         noise = torch.randn_like(padded_actions)
@@ -857,17 +805,15 @@ def _run_validation(
         "val_conditioning_gap_neg": total_gap_neg / total_n_neg
         if total_n_neg > 0
         else float("nan"),
-        "val_adv_episode_alignment": total_aligned / total_samples
-        if has_episode_info
-        else float("nan"),
+        "val_adv_episode_alignment": total_aligned / total_samples,
         "val_alignment_on_success": (
             total_aligned_success / total_success_samples
-            if has_episode_info and total_success_samples > 0
+            if total_success_samples > 0
             else float("nan")
         ),
         "val_alignment_on_failure": (
             total_aligned_failure / total_failure_samples
-            if has_episode_info and total_failure_samples > 0
+            if total_failure_samples > 0
             else float("nan")
         ),
     }
@@ -972,9 +918,11 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         episodes=cfg.episodes,
     )
 
-    labels_csv_path = _resolve_labels_csv(cfg)
-    logging.info(f"Using episode labels from: {labels_csv_path}")
-    success_by_episode = base._load_episode_success_map(labels_csv_path)
+    success_by_episode = base._load_episode_success_from_dataset(full_dataset)
+    logging.info(
+        f"Loaded success labels for {len(success_by_episode)} episodes "
+        "from the dataset's 'success' column."
+    )
 
     if cfg.enable_advantage_conditioning:
         use_pretrained_vn = cfg.value_network_pretrained_path is not None
@@ -1041,7 +989,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     )
 
     # ── 2. Build policy config and preprocessor ────────────────────────────
-    policy_cfg = _build_policy_config(cfg, full_dataset, labels_csv_path)
+    policy_cfg = _build_policy_config(cfg, full_dataset)
     _log_memory("post-dataset-split")
 
     # ── 3. Pre-compute advantages using Pi0.5-based value network ────────
@@ -1103,7 +1051,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     # ── 4. Create separate datasets for train and val ────────────────────
     delta_timestamps = resolve_delta_timestamps(policy_cfg, full_dataset.meta)
 
-    del full_dataset, frame_targets, train_targets, val_targets, success_by_episode
+    del full_dataset, frame_targets, train_targets, val_targets
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -1132,7 +1080,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     original_dtype = torch.get_default_dtype()
     torch.set_default_dtype(target_dtype)
     try:
-        policy = PiStar06Policy(config=policy_cfg, dataset_meta=train_dataset.meta)
+        policy = PiStar06Policy(config=policy_cfg)
     finally:
         torch.set_default_dtype(original_dtype)
     _log_memory("post-policy-init")
@@ -1375,6 +1323,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
                     step_val_loader,
                     preprocessor,
                     advantage_lookup,
+                    success_by_episode,
                     device,
                     max_steps=step_val_max,
                 )
@@ -1431,6 +1380,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
                 val_loader,
                 preprocessor,
                 advantage_lookup,
+                success_by_episode,
                 device,
                 max_steps=cfg.max_val_steps_per_epoch,
             )
@@ -1447,6 +1397,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
                     step_val_loader,
                     preprocessor,
                     advantage_lookup,
+                    success_by_episode,
                     device,
                     max_steps=cfg.max_val_steps_per_epoch,
                 )

@@ -12,7 +12,6 @@ returns when the n-step window extends past the episode boundary.
 import json
 from collections import Counter
 from dataclasses import dataclass
-from pathlib import Path
 
 import draccus
 import numpy as np
@@ -24,6 +23,7 @@ from torch.utils.data import DataLoader
 
 import lerobot_policy_advantage as lerobot_policy_advantage
 from distal.rewards import compute_nstep_advantages
+from distal.train_value import _load_episode_success_from_dataset
 from distal.value_model import RECAPValueNetwork
 
 
@@ -38,43 +38,8 @@ class ComputeAdvantageLabelsConfig:
     advantage_percentile: float = 0.7
     batch_size: int = 256
     num_workers: int = 16
-    labels_csv_path: str | None = None
     c_fail: float = 500.0
     gamma: float = 1.0
-
-
-def resolve_labels_csv(dataset: LeRobotDataset, labels_csv_path: str | None) -> Path:
-    """Find the episode-labels CSV, downloading from HF if needed."""
-    if labels_csv_path is not None:
-        path = Path(labels_csv_path).expanduser()
-        if not path.is_file():
-            raise FileNotFoundError(f"Provided labels_csv_path does not exist: {path}")
-        return path
-
-    default_path = dataset.root / "meta" / "episode_labels.csv"
-    if default_path.is_file():
-        return default_path
-
-    try:
-        from huggingface_hub import hf_hub_download
-
-        hf_hub_download(
-            repo_id=dataset.repo_id,
-            filename="meta/episode_labels.csv",
-            repo_type="dataset",
-            local_dir=str(dataset.root),
-        )
-    except Exception:
-        pass
-
-    if default_path.is_file():
-        return default_path
-
-    raise FileNotFoundError(
-        f"No episode labels CSV found at {default_path}. "
-        "Pass --labels_csv_path explicitly or push meta/episode_labels.csv "
-        "to the HuggingFace dataset."
-    )
 
 
 def compute_rewards_and_returns(
@@ -233,14 +198,9 @@ def main(cfg: ComputeAdvantageLabelsConfig):
     task_map = {v: k for k, v in dataset.meta.tasks["task_index"].items()}
     tasks = [task_map[i] for i in task_index]
 
-    # Compute rewards and returns from episode labels
-    labels_csv = resolve_labels_csv(dataset, cfg.labels_csv_path)
-    print(f"Using episode labels from: {labels_csv}")
-    labels_df = pd.read_csv(labels_csv)
-    success_by_episode = {
-        int(row["episode_index"]): int(row["success"])
-        for _, row in labels_df.iterrows()
-    }
+    # Compute rewards and returns from per-episode success labels
+    success_by_episode = _load_episode_success_from_dataset(dataset)
+    print(f"Loaded success labels for {len(success_by_episode)} episodes")
 
     rewards, returns = compute_rewards_and_returns(
         dataset, success_by_episode, cfg.c_fail

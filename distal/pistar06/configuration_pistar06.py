@@ -56,8 +56,5 @@ class PiStar06Config(PI05Config):
     # Classifier-free guidance scale (1.0 = no CFG, >1.0 = sharpen with CFG)
     cfg_beta: float = 1.0
 
-    # Episode labels CSV for on-the-fly return computation
-    episode_labels_path: str | None = None
-
     # PaliGemma tokenizer (shared across all PaliGemma model sizes)
     paligemma_tokenizer_name: str = "google/paligemma-3b-pt-224"

@@ -15,9 +15,8 @@
 # limitations under the License.
 """Train/val script for the standalone RECAP distributional value network.
 
-Fixed CSV schema expected by this script:
-- `episode_index`: episode identifier matching LeRobot dataset episode indices
-- `success`: binary episode outcome label (1 for success, 0 for failure)
+Reads per-episode success labels from the dataset's ``success`` column
+(populated by ``distal/collect.py``).
 """
 
 import json
@@ -32,13 +31,11 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn.functional as F  # noqa: N812
 from lerobot.configs import parser
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.video_utils import _default_decoder_cache
-from lerobot.utils.constants import HF_LEROBOT_HOME
 from torch.utils.data import DataLoader, Dataset
 
 from distal.value_model import (
@@ -46,10 +43,6 @@ from distal.value_model import (
     RECAPValueNetwork,
     build_value_preprocessor,
 )
-
-CSV_EPISODE_INDEX_COLUMN = "episode_index"
-CSV_SUCCESS_COLUMN = "success"
-DEFAULT_EPISODE_LABELS_FILENAME = "meta/episode_labels.csv"
 
 
 @dataclass(frozen=True)
@@ -86,8 +79,7 @@ class ValidationFramePrediction:
 class RECAPValueTrainingConfig:
     """Configuration for RECAP value-network train/val."""
 
-    repo_id: str = "reece-omahoney/libero-10"
-    labels_csv_path: str | None = None
+    repo_id: str = "reece-omahoney/pi05-libero-10"
     root: str | None = None
     revision: str | None = None
     episodes: list[int] | None = None
@@ -136,13 +128,13 @@ class RECAPValueTrainingConfig:
     pretrained_path: str | None = "lerobot/pi05_base"
 
     # Hub push for trained value network
-    value_repo_id: str | None = "reece-omahoney/value-steps-paligemma"
+    value_repo_id: str | None = "reece-omahoney/value-steps-pi05-paligemma"
     push_to_hub: bool = True
 
     # Weights & Biases (optional; set wandb_project to enable)
     wandb_project: str | None = "distal-value"
     wandb_entity: str | None = None
-    wandb_run_name: str | None = "value-steps-paligemma"
+    wandb_run_name: str | None = "value-steps-pi05-paligemma"
 
 
 def _build_warmup_cosine_scheduler(
@@ -208,84 +200,18 @@ def _is_known_video_validation_error(error: Exception) -> bool:
     )
 
 
-def _load_episode_success_map(labels_csv_path: Path) -> dict[int, int]:
-    labels_df = pd.read_csv(labels_csv_path)
-    missing_columns = [
-        column
-        for column in (CSV_EPISODE_INDEX_COLUMN, CSV_SUCCESS_COLUMN)
-        if column not in labels_df.columns
-    ]
-    if missing_columns:
-        raise ValueError(
-            f"CSV {labels_csv_path} is missing required columns: {missing_columns}. "
-            f"Expected schema: [{CSV_EPISODE_INDEX_COLUMN}, {CSV_SUCCESS_COLUMN}]"
-        )
-
+def _load_episode_success_from_dataset(
+    dataset: LeRobotDataset,
+) -> dict[int, int]:
+    """Read the per-episode ``success`` label written by ``collect.py``."""
     success_map: dict[int, int] = {}
-    for _, row in labels_df.iterrows():
-        episode_index = _to_int(row[CSV_EPISODE_INDEX_COLUMN])
-        success = _to_int(row[CSV_SUCCESS_COLUMN])
-        if success not in (0, 1):
-            raise ValueError(
-                f"CSV success labels must be 0/1. Found {success} for "
-                f"episode_index={episode_index}."
-            )
-        success_map[episode_index] = success
+    for ep_idx, success in zip(
+        dataset.hf_dataset["episode_index"], dataset.hf_dataset["success"]
+    ):
+        ep_idx = _to_int(ep_idx)
+        if ep_idx not in success_map:
+            success_map[ep_idx] = int(bool(success))
     return success_map
-
-
-def _resolve_labels_csv_path(cfg: RECAPValueTrainingConfig) -> Path:
-    """Return the path to the episode-labels CSV.
-
-    When ``labels_csv_path`` is provided explicitly, that path is used directly.
-    Otherwise the file is expected at ``<dataset_root>/meta/episode_labels.csv``.
-
-    If the file isn't in the local cache yet (e.g. the dataset was cached before
-    the labels were pushed), the resolver attempts to download it from HuggingFace.
-    """
-    if cfg.labels_csv_path is not None:
-        resolved = Path(cfg.labels_csv_path).expanduser()
-        if not resolved.is_file():
-            raise FileNotFoundError(
-                f"Provided --labels_csv_path does not exist: {resolved}"
-            )
-        return resolved
-
-    dataset_root = (
-        Path(cfg.root) / cfg.repo_id if cfg.root else HF_LEROBOT_HOME / cfg.repo_id
-    )
-    default_path = dataset_root / DEFAULT_EPISODE_LABELS_FILENAME
-    if default_path.is_file():
-        return default_path
-
-    # The local cache may predate the labels upload — try fetching the file.
-    try:
-        from huggingface_hub import hf_hub_download
-
-        logging.info(
-            f"Episode labels not found locally at {default_path}; "
-            f"attempting to download from {cfg.repo_id} ..."
-        )
-        hf_hub_download(
-            repo_id=cfg.repo_id,
-            filename=DEFAULT_EPISODE_LABELS_FILENAME,
-            repo_type="dataset",
-            revision=cfg.revision,
-            local_dir=str(dataset_root),
-        )
-    except Exception:  # noqa: BLE001
-        pass
-
-    if default_path.is_file():
-        return default_path
-
-    raise FileNotFoundError(
-        f"No episode labels CSV found at the default location: {default_path}\n"
-        "Either:\n"
-        "  1. Push a labels CSV to your HuggingFace dataset under "
-        "meta/episode_labels.csv, or\n"
-        "  2. Pass --labels_csv_path explicitly."
-    )
 
 
 def _selected_episode_indices(dataset: LeRobotDataset) -> list[int]:
@@ -372,7 +298,7 @@ def _build_frame_targets(
     missing_episode_labels = sorted(set(episode_infos) - set(success_by_episode))
     if missing_episode_labels:
         raise ValueError(
-            "CSV is missing success labels for episode indices: "
+            "Dataset is missing success labels for episode indices: "
             f"{missing_episode_labels[:20]}"
         )
 
@@ -1090,9 +1016,11 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         episodes=cfg.episodes,
     )
 
-    labels_csv_path = _resolve_labels_csv_path(cfg)
-    logging.info(f"Using episode labels from: {labels_csv_path}")
-    success_by_episode = _load_episode_success_map(labels_csv_path)
+    success_by_episode = _load_episode_success_from_dataset(dataset)
+    logging.info(
+        f"Loaded success labels for {len(success_by_episode)} episodes "
+        "from the dataset's 'success' column."
+    )
     frame_targets = _build_frame_targets(
         dataset=dataset,
         success_by_episode=success_by_episode,
