@@ -36,6 +36,7 @@ import torch.nn.functional as F  # noqa: N812
 from lerobot.configs import parser
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.video_utils import _default_decoder_cache
+from lerobot.utils.import_utils import register_third_party_plugins
 from torch.utils.data import DataLoader, Dataset
 
 from distal.value_model import (
@@ -1015,6 +1016,7 @@ def _resolve_device(device_str: str) -> torch.device:
 @parser.wrap()
 def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
     """Train/validate RECAPValueNetwork with distributional bin supervision."""
+    register_third_party_plugins()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
