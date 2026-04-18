@@ -49,8 +49,7 @@ from lerobot.envs.utils import close_envs
 from lerobot.scripts.lerobot_eval import eval_policy_all
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE_TOKENS
 from torch.nn.utils import clip_grad_norm_
-from torch.utils.data import DataLoader, Dataset
-from torch.utils.data.dataloader import default_collate
+from torch.utils.data import DataLoader
 
 from distal import train_value as base
 from distal.pistar06.modeling_pistar06 import PiStar06Policy
@@ -417,34 +416,6 @@ def _make_vn_preprocessor(policy_cfg, dataset_stats):
     return PolicyProcessorPipeline(steps=steps, name="vn_preprocessor")
 
 
-class _ResilientVideoDataset(Dataset):
-    """Wraps a LeRobotDataset so known video decode errors skip the frame."""
-
-    def __init__(self, base_dataset: LeRobotDataset):
-        self.base_dataset = base_dataset
-
-    def __len__(self) -> int:
-        return len(self.base_dataset)
-
-    def __getitem__(self, index: int) -> dict | None:
-        try:
-            return self.base_dataset[index]
-        except (IndexError, RuntimeError) as exc:
-            if not base._is_known_video_validation_error(exc):
-                raise
-            logging.warning(
-                f"Skipping frame {index} during advantage pre-computation: {exc}"
-            )
-            return None
-
-
-def _skip_none_collate(items):
-    items = [x for x in items if x is not None]
-    if not items:
-        return None
-    return default_collate(items)
-
-
 @torch.no_grad()
 def _precompute_advantages(
     full_dataset: LeRobotDataset,
@@ -500,29 +471,22 @@ def _precompute_advantages(
         abs_idx = int(full_dataset.hf_dataset[ft.frame_index]["index"])
         R_t_by_abs_index[abs_idx] = ft.target_value
 
-    resilient_dataset = _ResilientVideoDataset(full_dataset)
     loader = DataLoader(
-        resilient_dataset,
+        full_dataset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=0,
         drop_last=False,
-        collate_fn=_skip_none_collate,
     )
 
     advantage_lookup: dict[int, float] = {}
     episode_lookup: dict[int, int] = {}
     total_frames = 0
 
-    skipped_frames = 0
     for batch in loader:
-        if batch is None:
-            skipped_frames += batch_size
-            continue
         abs_indices = batch["index"]
         ep_indices = batch["episode_index"]
         B = abs_indices.shape[0]
-        skipped_frames += batch_size - B
 
         batch = preprocessor(batch)
         outputs = vn.compute_outputs(batch)
@@ -542,11 +506,6 @@ def _precompute_advantages(
                 f"{len(full_dataset)} frames"
             )
 
-    if skipped_frames:
-        logging.warning(
-            f"Skipped ~{skipped_frames} frames during advantage pre-computation "
-            f"due to known video decode errors."
-        )
     logging.info(
         f"Advantage pre-computation complete: {len(advantage_lookup)} frames, "
         f"mean={sum(advantage_lookup.values()) / max(1, len(advantage_lookup)):.4f}"
