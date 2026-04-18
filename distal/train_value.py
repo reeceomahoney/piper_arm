@@ -197,6 +197,7 @@ def _is_known_video_validation_error(error: Exception) -> bool:
         or "FrameTimestampError" in message
         or "tolerance_s=" in message
         or "Failed to decode frame" in message
+        or "Invalid frame index=" in message
     )
 
 
@@ -531,6 +532,10 @@ class RECAPFrameSupervisionDataset(Dataset):
         for attempt in range(self._MAX_DECODE_RETRIES):
             try:
                 return self.base_dataset[frame_index]
+            except IndexError as exc:
+                if not _is_known_video_validation_error(exc):
+                    raise
+                return None
             except RuntimeError as exc:
                 if not _is_known_video_validation_error(exc):
                     raise
