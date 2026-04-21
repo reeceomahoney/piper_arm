@@ -1490,4 +1490,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
 
 
 if __name__ == "__main__":
+    import torch.multiprocessing as mp
+
+    mp.set_start_method("spawn", force=True)
     run_recap_pistar_train_val()  # ty: ignore[missing-argument]
