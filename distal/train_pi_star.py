@@ -52,6 +52,7 @@ from lerobot_policy_pistar06.modeling_pistar06 import PiStar06Policy
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
 
+from distal import advantage_cache
 from distal import train_value as base
 
 if TYPE_CHECKING:
@@ -77,7 +78,7 @@ class RECAPPiStarTrainingConfig:
     value_network_checkpoint: str = ""
     value_network_checkpoint_filename: str = ""
     value_network_pretrained_path: str | None = (
-        "reece-omahoney/value-steps-pi05-paligemma"
+        "reece-omahoney/value-maha-pi05-paligemma"
     )
     root: str | None = None
     revision: str | None = None
@@ -86,7 +87,7 @@ class RECAPPiStarTrainingConfig:
     epochs: int = 5
     batch_size: int = 64
     num_workers: int = 4
-    learning_rate: float = 2e-4
+    learning_rate: float = 3e-4
     weight_decay: float = 1e-4
     max_grad_norm: float = 1.0
     val_split_ratio: float = 0.1
@@ -103,7 +104,7 @@ class RECAPPiStarTrainingConfig:
     enable_advantage_conditioning: bool = True
 
     # RECAP advantage conditioning
-    c_fail: float = 500.0
+    c_fail: float = 50.0
     num_value_bins: int = 50
     # Per-frame advantage threshold: only frames with advantage > threshold get
     # "Advantage: positive" text.  The paper (Appendix A.4) sets this to a
@@ -132,8 +133,15 @@ class RECAPPiStarTrainingConfig:
     # Value network pre-computation
     vn_batch_size: int = 640
 
-    # Advantage caching (skip re-computation on subsequent runs)
-    advantage_cache_path: str | None = "outputs/advantage_cache.json"
+    # Advantage caching: content-addressed cache keyed by a hash of the
+    # inputs that determine the precomputed advantages. Cache files are
+    # mirrored on HF Hub under ``advantage_cache_repo_id`` (set to None to
+    # disable remote cache). Bump ``advantage_cache_schema_version`` to
+    # invalidate all existing caches after a pipeline change that file
+    # hashes can't detect.
+    advantage_cache_repo_id: str | None = "reece-omahoney/advantage-caches"
+    advantage_cache_local_dir: str = "outputs"
+    advantage_cache_schema_version: int = 1
 
     # Sim eval (defaults mirror configs/eval.yaml)
     env: EnvConfig | None = field(
@@ -148,13 +156,13 @@ class RECAPPiStarTrainingConfig:
     max_parallel_tasks: int = 1
 
     # Hub push for trained PiStar06 policy
-    pi_star_repo_id: str | None = "reece-omahoney/pistar06-libero-steps"
+    pi_star_repo_id: str | None = "reece-omahoney/pistar06-libero-maha"
     push_to_hub: bool = True
 
     # Weights & Biases (optional; set wandb_project to enable)
     wandb_project: str | None = "distal"
     wandb_entity: str | None = None
-    wandb_run_name: str | None = "pistar06-libero-steps"
+    wandb_run_name: str | None = "pistar06-libero-maha"
 
 
 def _init_wandb(cfg: RECAPPiStarTrainingConfig):
@@ -514,48 +522,6 @@ def _precompute_advantages(
         torch.cuda.empty_cache()
 
     return advantage_lookup, episode_lookup
-
-
-def _save_advantage_cache(
-    path: str | Path,
-    advantage_lookup: dict[int, float],
-    episode_lookup: dict[int, int] | None = None,
-    metadata: dict | None = None,
-) -> None:
-    """Save pre-computed advantages to a JSON file for reuse across runs."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "advantages": {str(k): v for k, v in advantage_lookup.items()},
-        "num_frames": len(advantage_lookup),
-        "mean_advantage": sum(advantage_lookup.values())
-        / max(1, len(advantage_lookup)),
-    }
-    if episode_lookup is not None:
-        payload["episode_labels"] = {str(k): v for k, v in episode_lookup.items()}
-    if metadata:
-        payload["metadata"] = metadata
-    with open(path, "w") as f:
-        json.dump(payload, f)
-    logging.info(f"Saved advantage cache ({len(advantage_lookup)} frames) to {path}")
-
-
-def _load_advantage_cache(
-    path: str | Path,
-) -> tuple[dict[int, float], dict[int, int] | None]:
-    """Load pre-computed advantages from a JSON cache file."""
-    path = Path(path)
-    with open(path) as f:
-        payload = json.load(f)
-    lookup = {int(k): float(v) for k, v in payload["advantages"].items()}
-    episode_lookup = None
-    if "episode_labels" in payload:
-        episode_lookup = {int(k): int(v) for k, v in payload["episode_labels"].items()}
-    logging.info(
-        f"Loaded advantage cache from {path}: {len(lookup)} frames, "
-        f"mean={sum(lookup.values()) / max(1, len(lookup)):.4f}"
-    )
-    return lookup, episode_lookup
 
 
 def _compute_advantage_threshold(
@@ -1001,11 +967,26 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
 
     # ── 3. Pre-compute advantages using Pi0.5-based value network ────────
     if cfg.enable_advantage_conditioning:
-        cache_path = (
-            Path(cfg.advantage_cache_path) if cfg.advantage_cache_path else None
+        signature = advantage_cache.compute_signature(
+            schema_version=cfg.advantage_cache_schema_version,
+            dataset_repo_id=cfg.repo_id,
+            dataset_revision=cfg.revision,
+            episodes=cfg.episodes,
+            value_network_pretrained_path=cfg.value_network_pretrained_path,
+            value_network_checkpoint=resolved_vn_checkpoint,
+            c_fail=cfg.c_fail,
+            num_value_bins=cfg.num_value_bins,
         )
-        if cache_path is not None and cache_path.is_file():
-            advantage_lookup, _ = _load_advantage_cache(cache_path)
+        logging.info(f"Advantage cache signature: {signature}")
+
+        cache_file: Path | None = None
+        if cfg.advantage_cache_repo_id:
+            cache_file = advantage_cache.try_download(
+                cfg.advantage_cache_repo_id, signature
+            )
+
+        if cache_file is not None:
+            advantage_lookup, _ = advantage_cache.load(cache_file)
         else:
             vn_model = None
             if use_pretrained_vn:
@@ -1024,17 +1005,27 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
             )
 
             vn_source = cfg.value_network_pretrained_path or resolved_vn_checkpoint
-            if cache_path is not None:
-                _save_advantage_cache(
-                    cache_path,
-                    advantage_lookup,
-                    episode_lookup=episode_lookup,
-                    metadata={
-                        "value_network_checkpoint": vn_source,
-                        "c_fail": cfg.c_fail,
-                        "repo_id": cfg.repo_id,
-                        "success_by_episode": success_by_episode,
-                    },
+            local_cache_path = (
+                Path(cfg.advantage_cache_local_dir)
+                / f"advantage_cache_{signature}.json"
+            )
+            advantage_cache.save(
+                local_cache_path,
+                advantage_lookup,
+                episode_lookup=episode_lookup,
+                metadata={
+                    "signature": signature,
+                    "schema_version": cfg.advantage_cache_schema_version,
+                    "value_network_checkpoint": vn_source,
+                    "c_fail": cfg.c_fail,
+                    "num_value_bins": cfg.num_value_bins,
+                    "repo_id": cfg.repo_id,
+                    "success_by_episode": success_by_episode,
+                },
+            )
+            if cfg.advantage_cache_repo_id:
+                advantage_cache.upload(
+                    local_cache_path, cfg.advantage_cache_repo_id, signature
                 )
         _log_memory("post-advantage-precompute")
 
