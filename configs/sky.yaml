@@ -2,8 +2,8 @@ name: distal-train
 
 resources:
   cloud: vast
-  accelerators: RTX5090
-  disk_size: 64
+  accelerators: H100
+  disk_size: 128
   autostop:
     idle_minutes: 10
     down: true
@@ -13,7 +13,7 @@ envs:
   WANDB_API_KEY:
   MUJOCO_GL: egl
   PYOPENGL_PLATFORM: egl
-  SLURM_JOB_ID: 0  # suppress tqdm
+  # SLURM_JOB_ID: 0  # suppress tqdm
 workdir: .
 
 setup: |
@@ -42,4 +42,4 @@ setup: |
 
 run: |
   cd ~/sky_workdir
-  uv run distal/train_value.py
+  uv run distal/train_pi_star.py
