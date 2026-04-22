@@ -10,7 +10,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv.sources]
-lerobot = { git = "https://github.com/reeceomahoney/lerobot", branch = "fix/rollout-return-observations-nested-dict" }
+lerobot = { git = "https://github.com/reeceomahoney/lerobot", branch = "distal"}
 
 [tool.hatch.metadata]
 allow-direct-references = true

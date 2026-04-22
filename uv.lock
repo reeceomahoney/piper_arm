@@ -750,7 +750,7 @@ dev = [
 requires-dist = [
     { name = "google-api-python-client", specifier = ">=2.193.0" },
     { name = "google-cloud-tpu", specifier = ">=1.26.0" },
-    { name = "lerobot", extras = ["libero", "pi", "smolvla"], git = "https://github.com/reeceomahoney/lerobot?branch=fix%2Frollout-return-observations-nested-dict" },
+    { name = "lerobot", extras = ["libero", "pi", "smolvla"], git = "https://github.com/reeceomahoney/lerobot?branch=distal" },
     { name = "lerobot-policy-advantage", editable = "lerobot_policy_advantage" },
     { name = "lerobot-policy-pistar06", editable = "lerobot_policy_pistar06" },
     { name = "matplotlib", specifier = ">=3.7.0" },
@@ -1790,7 +1790,7 @@ wheels = [
 [[package]]
 name = "lerobot"
 version = "0.5.2"
-source = { git = "https://github.com/reeceomahoney/lerobot?branch=fix%2Frollout-return-observations-nested-dict#09c5cbacc5cdd74c9850aea75674a42082ebdfc8" }
+source = { git = "https://github.com/reeceomahoney/lerobot?branch=distal#ff8131a848ae1f3504a376b40954211ce426b29f" }
 dependencies = [
     { name = "accelerate" },
     { name = "av" },
@@ -1847,7 +1847,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "distal" },
-    { name = "lerobot", git = "https://github.com/reeceomahoney/lerobot?branch=fix%2Frollout-return-observations-nested-dict" },
+    { name = "lerobot", git = "https://github.com/reeceomahoney/lerobot?branch=distal" },
 ]
 
 [[package]]
@@ -1862,7 +1862,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "distal" },
-    { name = "lerobot", git = "https://github.com/reeceomahoney/lerobot?branch=fix%2Frollout-return-observations-nested-dict" },
+    { name = "lerobot", git = "https://github.com/reeceomahoney/lerobot?branch=distal" },
 ]
 
 [[package]]

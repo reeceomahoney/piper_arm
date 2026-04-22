@@ -40,7 +40,7 @@ lerobot_teleoperator_piper = { path = "lerobot_teleoperator_piper", editable = t
 lerobot_policy_advantage = { path = "lerobot_policy_advantage", editable = true }
 lerobot_policy_pistar06 = { path = "lerobot_policy_pistar06", editable = true }
 slurm-tools = { git = "https://github.com/reeceomahoney/slurm-tools.git" }
-lerobot = { git = "https://github.com/reeceomahoney/lerobot", branch = "fix/rollout-return-observations-nested-dict" }
+lerobot = { git = "https://github.com/reeceomahoney/lerobot", branch = "distal"}
 
 [tool.hatch.metadata]
 allow-direct-references = true
