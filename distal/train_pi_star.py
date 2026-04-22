@@ -98,6 +98,7 @@ class RECAPPiStarTrainingConfig:
     log_every_n_steps: int = 10
     validate_every_n_train_steps: int = 1000
     max_val_steps_per_step_validation: int | None = 50
+    sim_eval_every_n_train_steps: int = 500
 
     # Master switch: set to False to train vanilla Pi0.5 without advantage
     # text injection (baseline for ablation experiments).
@@ -1336,6 +1337,30 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
                 policy.train()
                 _restore_freeze_state(policy, cfg)
 
+            # Step-based sim eval
+            if (
+                eval_env is not None
+                and cfg.sim_eval_every_n_train_steps > 0
+                and global_train_step % cfg.sim_eval_every_n_train_steps == 0
+            ):
+                step_eval_metrics = _run_sim_eval(
+                    policy=policy,
+                    eval_env=eval_env,
+                    env_preprocessor=env_preprocessor,
+                    env_postprocessor=env_postprocessor,
+                    preprocessor=preprocessor,
+                    postprocessor=postprocessor,
+                    cfg=cfg,
+                    step=global_train_step,
+                    output_dir=output_dir,
+                    wandb_run=wandb_run,
+                )
+                wandb_step_metrics.update(
+                    {f"eval/{k}": v for k, v in step_eval_metrics.items()}
+                )
+                policy.train()
+                _restore_freeze_state(policy, cfg)
+
             if wandb_run is not None and wandb_step_metrics:
                 wandb_run.log(wandb_step_metrics, step=global_train_step)
 
@@ -1398,29 +1423,11 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
 
         _log_val_metrics(f"Epoch {epoch}/{cfg.epochs} epoch-end", val_metrics)
 
-        eval_metrics: dict[str, float] = {}
-        if eval_env is not None:
-            eval_metrics = _run_sim_eval(
-                policy=policy,
-                eval_env=eval_env,
-                env_preprocessor=env_preprocessor,
-                env_postprocessor=env_postprocessor,
-                preprocessor=preprocessor,
-                postprocessor=postprocessor,
-                cfg=cfg,
-                step=global_train_step,
-                output_dir=output_dir,
-                wandb_run=wandb_run,
-            )
-            policy.train()
-            _restore_freeze_state(policy, cfg)
-
         epoch_metrics = {
             "epoch": epoch,
             "train_loss": train_loss,
             "lr": optimizer.param_groups[0]["lr"],
             **val_metrics,
-            **{f"eval_{k}": v for k, v in eval_metrics.items()},
         }
         history.append(epoch_metrics)
 
