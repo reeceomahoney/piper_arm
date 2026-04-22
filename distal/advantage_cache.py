@@ -12,15 +12,6 @@ import logging
 from pathlib import Path
 
 
-def hash_file(path: str | Path, chunk_size: int = 1 << 20) -> str:
-    """Compute sha256 of a file in streaming chunks."""
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        while chunk := f.read(chunk_size):
-            h.update(chunk)
-    return h.hexdigest()
-
-
 def resolve_hub_sha(repo_id: str, repo_type: str, revision: str | None = None) -> str:
     """Return the commit SHA for a HF Hub repo, or a sentinel if unreachable.
 
@@ -52,23 +43,14 @@ def compute_signature(
     dataset_repo_id: str,
     dataset_revision: str | None,
     episodes: list[int] | None,
-    value_network_pretrained_path: str | None,
-    value_network_checkpoint: str | None,
+    value_network_pretrained_path: str,
     c_fail: float,
     num_value_bins: int,
 ) -> str:
     """Build a deterministic 16-hex-char signature over all cache-affecting inputs."""
     dataset_sha = resolve_hub_sha(dataset_repo_id, "dataset", dataset_revision)
-
-    if value_network_pretrained_path is not None:
-        vn_id = value_network_pretrained_path
-        vn_sha = resolve_hub_sha(vn_id, "model")
-    elif value_network_checkpoint is not None:
-        vn_id = value_network_checkpoint
-        logging.info(f"Hashing VN checkpoint for signature: {vn_id}")
-        vn_sha = hash_file(value_network_checkpoint)
-    else:
-        raise ValueError("No value network source available for signature")
+    vn_id = value_network_pretrained_path
+    vn_sha = resolve_hub_sha(vn_id, "model")
 
     sig_dict = {
         "schema_version": schema_version,

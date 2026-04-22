@@ -39,6 +39,15 @@ def push_value(checkpoint_dir: Path, repo_id: str, private: bool):
     else:
         logging.warning("No %s found in %s", REWARD_CONTEXT_FILENAME, checkpoint_dir)
 
+    train_config_path = checkpoint_dir / "train_config.json"
+    if train_config_path.exists():
+        upload_file(
+            path_or_fileobj=str(train_config_path),
+            path_in_repo="train_config.json",
+            repo_id=repo_id,
+        )
+        logging.info("Uploaded train_config.json")
+
 
 def push_policy(checkpoint_dir: Path, repo_id: str, private: bool):
     from lerobot.configs.train import TrainPipelineConfig

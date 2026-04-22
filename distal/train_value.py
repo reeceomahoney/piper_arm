@@ -1260,6 +1260,7 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
             last_dir, config_filename="policy_preprocessor.json"
         )
         _save_json(last_dir / "metrics.json", metrics_to_save)
+        _save_json(last_dir / "train_config.json", asdict(cfg))
 
         val_loss = val_metrics.get("loss", float("nan"))
         if math.isnan(val_loss):
@@ -1275,6 +1276,7 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
                 best_dir, config_filename="policy_preprocessor.json"
             )
             _save_json(best_dir / "metrics.json", metrics_to_save)
+            _save_json(best_dir / "train_config.json", asdict(cfg))
             logging.info(
                 f"[{trigger_tag}] New best val_loss={val_loss:.5f}; "
                 "saved best checkpoint."
@@ -1573,9 +1575,17 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
     logging.info(f"Training complete. Best val loss: {best_val_loss:.5f}")
 
     if cfg.push_to_hub and cfg.value_repo_id:
+        from huggingface_hub import upload_file
+
         logging.info(f"Pushing value network to hub: {cfg.value_repo_id}")
         model.push_to_hub(cfg.value_repo_id)
         preprocessor.push_to_hub(cfg.value_repo_id)
+        upload_file(
+            path_or_fileobj=str(output_dir / "train_config.json"),
+            path_in_repo="train_config.json",
+            repo_id=cfg.value_repo_id,
+            repo_type="model",
+        )
 
     if wandb_run is not None:
         wandb_run.finish()
