@@ -87,7 +87,7 @@ class RECAPPiStarTrainingConfig:
     epochs: int = 5
     batch_size: int = 64
     num_workers: int = 4
-    learning_rate: float = 3e-4
+    learning_rate: float = 2e-4
     weight_decay: float = 1e-4
     max_grad_norm: float = 1.0
     val_split_ratio: float = 0.1
