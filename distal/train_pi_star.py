@@ -1035,7 +1035,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     )
 
     # ── 8. Training loop ─────────────────────────────────────────────────
-    best_val_cond_acc = -1.0
+    best_pc_success = -1.0
     history: list[dict] = []
     global_train_step = 0
 
@@ -1189,6 +1189,22 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
                 wandb_step_metrics.update(
                     {f"eval/{k}": v for k, v in step_eval_metrics.items()}
                 )
+
+                pc_success = step_eval_metrics["pc_success"]
+                if pc_success > best_pc_success:
+                    best_pc_success = pc_success
+                    best_checkpoint = {
+                        "epoch": epoch,
+                        "global_train_step": global_train_step,
+                        "model_state_dict": policy.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "policy_config": policy_cfg,
+                        "train_config": asdict(cfg),
+                        "metrics": step_eval_metrics,
+                    }
+                    torch.save(best_checkpoint, checkpoints_dir / "best.pt")
+                    logging.info(f"New best pc_success: {best_pc_success:.4f}")
+
                 policy.train()
                 _restore_freeze_state(policy, cfg)
 
@@ -1288,15 +1304,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         }
         torch.save(checkpoint, checkpoints_dir / "last.pt")
 
-        cond_acc = val_metrics["val_conditioning_accuracy"]
-        if not (cond_acc != cond_acc) and cond_acc > best_val_cond_acc:  # noqa: PLR0124 (NaN check)
-            best_val_cond_acc = cond_acc
-            torch.save(checkpoint, checkpoints_dir / "best.pt")
-            logging.info(f"New best conditioning accuracy: {best_val_cond_acc:.4f}")
-
-    logging.info(
-        f"Training complete. Best val conditioning accuracy: {best_val_cond_acc:.4f}"
-    )
+    logging.info(f"Training complete. Best pc_success: {best_pc_success:.4f}")
 
     if eval_env is not None:
         close_envs(eval_env)
