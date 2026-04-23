@@ -17,7 +17,17 @@ envs:
 workdir: .
 
 setup: |
-  sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libglvnd0 libopengl0 cmake g++
+  sudo apt-get update && sudo apt-get install -y \
+    cmake \
+    ffmpeg \
+    g++ \
+    libegl1 \
+    libexpat1 \
+    libfontconfig1-dev \
+    libgl1 \
+    libglvnd0 \
+    libmagickwand-dev \
+    libopengl0
 
   curl https://mise.run | sh
   echo 'eval "$($HOME/.local/bin/mise activate bash)"' >> ~/.bashrc
