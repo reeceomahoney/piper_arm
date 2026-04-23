@@ -40,7 +40,6 @@ from lerobot.configs.default import EvalConfig
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType
 from lerobot.datasets.factory import resolve_delta_timestamps
-from lerobot.datasets.feature_utils import dataset_to_policy_features
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.sampler import EpisodeAwareSampler
 from lerobot.envs.configs import EnvConfig, LiberoEnv
@@ -48,6 +47,7 @@ from lerobot.envs.factory import make_env, make_env_pre_post_processors
 from lerobot.envs.utils import close_envs
 from lerobot.scripts.lerobot_eval import eval_policy_all
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE_TOKENS
+from lerobot.utils.feature_utils import dataset_to_policy_features
 from lerobot_policy_pistar06.modeling_pistar06 import PiStar06Policy
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader

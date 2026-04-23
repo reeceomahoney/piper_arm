@@ -407,9 +407,9 @@ def build_value_preprocessor(
 ) -> Any:
     """Build a pi05-compatible preprocessor for the value network."""
     from lerobot.configs.types import FeatureType
-    from lerobot.datasets.feature_utils import dataset_to_policy_features
     from lerobot.policies.pi05.configuration_pi05 import PI05Config
     from lerobot.policies.pi05.processor_pi05 import make_pi05_pre_post_processors
+    from lerobot.utils.feature_utils import dataset_to_policy_features
 
     features = dataset_to_policy_features(dataset.meta.features)
     output_features = {
