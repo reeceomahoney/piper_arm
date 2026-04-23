@@ -38,6 +38,17 @@ setup: |
 
   uv sync
 
+  LIBERO_DIR="$HOME/sky_workdir/.venv/lib/python3.12/site-packages/libero/libero"
+  if [ ! -d "$LIBERO_DIR/assets" ]; then
+    curl -L -o /tmp/libero_assets.zip \
+      "https://huggingface.co/datasets/Sylvest/LIBERO-plus/resolve/main/assets.zip"
+    TMP_EXTRACT=$(mktemp -d)
+    unzip -q /tmp/libero_assets.zip -d "$TMP_EXTRACT"
+    ASSETS_SRC=$(find "$TMP_EXTRACT" -type d -name assets -print -quit)
+    mv "$ASSETS_SRC" "$LIBERO_DIR/assets"
+    rm -rf /tmp/libero_assets.zip "$TMP_EXTRACT"
+  fi
+
   mkdir ~/.libero
   cat <<EOF > ~/.libero/config.yaml
   assets: $HOME/sky_workdir/.venv/lib/python3.12/site-packages/libero/libero/./assets
