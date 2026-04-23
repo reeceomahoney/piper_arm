@@ -17,8 +17,6 @@ def push_value(checkpoint_dir: Path, repo_id: str, private: bool):
     from huggingface_hub import upload_file
     from lerobot.processor.pipeline import PolicyProcessorPipeline
 
-    from distal.rewards import REWARD_CONTEXT_FILENAME
-
     model = RECAPValueNetwork.from_pretrained(str(checkpoint_dir))
     logging.info("Loaded value model from %s", checkpoint_dir)
     model.push_to_hub(repo_id, private=private)
@@ -27,17 +25,6 @@ def push_value(checkpoint_dir: Path, repo_id: str, private: bool):
         str(checkpoint_dir), config_filename="policy_preprocessor.json"
     )
     preprocessor.push_to_hub(repo_id)
-
-    reward_context_path = checkpoint_dir / REWARD_CONTEXT_FILENAME
-    if reward_context_path.exists():
-        upload_file(
-            path_or_fileobj=str(reward_context_path),
-            path_in_repo=REWARD_CONTEXT_FILENAME,
-            repo_id=repo_id,
-        )
-        logging.info("Uploaded %s", REWARD_CONTEXT_FILENAME)
-    else:
-        logging.warning("No %s found in %s", REWARD_CONTEXT_FILENAME, checkpoint_dir)
 
     train_config_path = checkpoint_dir / "train_config.json"
     if train_config_path.exists():
