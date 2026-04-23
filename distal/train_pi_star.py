@@ -37,6 +37,7 @@ from pathlib import Path
 import torch
 from lerobot.configs import parser
 from lerobot.configs.default import EvalConfig
+from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType
 from lerobot.datasets.factory import resolve_delta_timestamps
 from lerobot.datasets.feature_utils import dataset_to_policy_features
@@ -754,9 +755,10 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         # Pull num_value_bins from the VN policy config and c_fail from its
         # train_config.json so the return targets used here match what the
         # value network was trained against.
-        vn_policy_cfg = RECAPValueConfig.from_pretrained(
+        vn_policy_cfg = PreTrainedConfig.from_pretrained(
             cfg.value_network_pretrained_path
         )
+        assert isinstance(vn_policy_cfg, RECAPValueConfig)
         if vn_policy_cfg.num_value_bins != cfg.num_value_bins:
             logging.warning(
                 f"Overriding num_value_bins from {cfg.num_value_bins} -> "
