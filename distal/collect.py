@@ -140,7 +140,7 @@ def main(cfg: EvalDistConfig):
     )
 
     # ── Rollout ──
-    suite = benchmark.get_benchmark_dict()[suite_name]()
+    suite = benchmark.get_benchmark_dict()[suite_name]()  # ty: ignore[unresolved-attribute]
     n_tasks = len(suite.tasks)
     if cfg.max_tasks is not None:
         n_tasks = min(n_tasks, cfg.max_tasks)
