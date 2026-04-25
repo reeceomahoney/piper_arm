@@ -7,18 +7,6 @@ _.python.venv = ".venv"
 description = "Train base policy"
 run = "lerobot-train --config_path configs/train.yaml"
 
-[tasks.adv-train]
-description = "Train advantage policy"
-usage = 'arg "<name>"'
-run = """
-lerobot-train --config_path configs/advantage_train.yaml \
-  --job_name={{ usage.name }} \
-  --policy.path=reece-omahoney/adv-libero-base-fixed \
-  --policy.repo_id=reece-omahoney/{{ usage.name }} \
-  --policy.fixed_advantage=false \
-  --policy.advantage_dropout=0.3 \
-"""
-
 [tasks.eval]
 description = "Evaluate policy in LIBERO sim"
 run = """

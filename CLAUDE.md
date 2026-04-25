@@ -5,165 +5,157 @@ code in this repository.
 
 ## Project Overview
 
-Robotic imitation learning system for the Piper robotic arm. Uses Hugging Face's
-LeRobot framework for training vision-language-action policies (SmolVLA, PI05)
-and evaluating them in LIBERO simulation. Includes a RECAP-style RL pipeline:
-value function training, advantage estimation, and advantage-conditioned policy
-fine-tuning, plus Mahalanobis distance-based OOD detection.
+DistAL: a RECAP-style RL pipeline for fine-tuning VLAs (Pi0.5 / SmolVLA) with
+advantage conditioning and Mahalanobis-distance-based rewards, built on a fork
+of HuggingFace LeRobot. Primary evaluation target is LIBERO simulation; also
+supports a physical Piper arm.
 
-**Python 3.12** (`>=3.12,<3.13`). Uses **UV** as package manager with a frozen
-lock file. **Mise** as task runner.
+**Python 3.12** (`>=3.12,<3.13`). **uv** package manager (frozen `uv.lock`),
+**mise** task runner.
 
 ## Common Commands
 
 ```bash
-# Training & evaluation (all use UV + LeRobot CLI under the hood)
-mise run train              # Train base policy
-mise run adv-train          # Train advantage-conditioned policy
-mise run eval               # Evaluate policy in LIBERO sim
+# Base policy training & evaluation
+mise run train                           # lerobot-train using configs/train.yaml
+mise run eval                            # lerobot-eval in LIBERO sim (pi05-libero default)
 
-# Hardware
-mise run record             # Record demonstrations via teleop
-mise run play               # Play trained policy on physical arm
+# RECAP pipeline (run directly via uv, not lerobot-train)
+uv run python -m distal.collect          # rollouts → LeRobot dataset
+uv run python -m distal.collect_libero_plus
+uv run python -m distal.compute_maha_stats      # mean / cov_inv from base-dataset embeddings
+uv run python -m distal.train_value             # distributional value network
+uv run python -m distal.train_pi_star           # advantage-conditioned Pi0.5 fine-tune
+uv run python -m distal.maha_auroc              # Mahalanobis distance AUROC vs episode success
+uv run python -m distal.eval_guidance           # sweep guidance scales
 
-# Cloud / Cluster
-mise run sky                # Launch training on cloud via SkyPilot
-mise run sky-exec           # Send command to running SkyPilot cluster
-mise run container          # Build Singularity container and upload to cluster
-uv run slurm run            # Submit SLURM job to HTC cluster (see slurm-tools package)
+# Hardware (Piper)
+mise run record                          # teleop demos
+mise run play                            # play trained policy on the arm
 
-# GUI (Flask-based SLURM monitor, via slurm-tools package)
-uv run slurm gui            # Start background Flask server
-uv run slurm gui stop       # Stop Flask server
+# Cluster / cloud
+mise run sky [cluster_id]                # launch on Vast via SkyPilot, or sky exec on existing
+mise run sky-ssh [cluster_id]            # same but via SSH cloud
+mise run container                       # build container.sif and scp to HTC
+uv run slurm run                         # SLURM submit (slurm-tools git dep)
+uv run slurm gui [stop]                  # Flask job-monitor daemon
 
-# Code quality
-uv run pre-commit run --all-files     # Run all pre-commit hooks (ruff, mdformat, ty)
+# Quality
+uv run pre-commit run --all-files        # ruff (E,F,I + format), check-toml/yaml, mdformat --wrap 80, ty
 ```
 
-Ruff rules: E, F, I (errors, pyflakes, isort). Pre-commit also runs mdformat
-(80-char wrap) and ty (type checking).
+No formal test suite — verification is via `mise run eval` and the `maha_auroc`
+diagnostic.
 
-**Never start function or variable names with underscores.** Use plain names
-without leading underscores for all functions and variables.
+## Conventions
 
-**Do not add `Usage:` sections to module-level docstrings.** Scripts use draccus
-configs which are self-documenting.
-
-No formal test suite exists — testing is done manually via mise tasks.
-
-**Never use OSMesa for rendering.** Always use EGL (`MUJOCO_GL=egl`). OSMesa is
-too slow for policy evaluation.
-
-slurm_tools has its own git repo, use that to push changes to it.
-
-**SkyPilot API server caches code.** After patching SkyPilot source in `.venv`,
-run `uv run sky api stop` before retrying — the daemon keeps old modules loaded.
-
-**When submitting PRs to external repos**, always check for a pull request
-template (`.github/pull_request_template.md`) and contributing guidelines
-(`CONTRIBUTING.md`) before creating the PR. Follow their required format.
+- **Never start function or variable names with underscores.** Use plain names.
+- **Don't add `Usage:` sections to module docstrings** — entry points use
+  `draccus`/`lerobot.configs.parser`, which are self-documenting.
+- **Never use OSMesa for MuJoCo rendering. Always EGL** (`MUJOCO_GL=egl`,
+  `PYOPENGL_PLATFORM=egl`). OSMesa is too slow for policy evaluation.
+- `slurm-tools` is a separate git repo (pulled as a git dependency); push
+  changes to it from its own checkout.
+- **SkyPilot API server caches code.** After patching SkyPilot source under
+  `.venv/`, run `uv run sky api stop` before retrying — the daemon keeps stale
+  modules loaded.
+- **PRs to external repos** (LeRobot fork etc.): check
+  `.github/pull_request_template.md` and `CONTRIBUTING.md` first and follow
+  their format.
 
 ## Architecture
 
-### Training Pipeline
+### Pipeline
 
-The system implements a RECAP-style RL pipeline:
+The system is a multi-stage pipeline; each stage produces an artifact consumed
+by the next.
 
-1. **collect.py** — Roll out policy in LIBERO sim using LeRobot's
-   `eval_policy()`, create LeRobot dataset with per-episode `success` labels.
-1. **train_value.py** — Train distributional value function (SmolVLM + expert
-   backbone, cross-entropy over discretized return bins).
-1. **compute_advantage_labels.py** — Pre-compute binary advantage labels using
-   the trained value model. Computes per-task advantage thresholds (30th
-   percentile), binarizes per-sample advantages, and writes an `advantage_label`
-   column directly into the dataset's parquet files.
-1. **lerobot-train (advantage_train.yaml)** — Fine-tune SmolVLA with binary
-   advantage conditioning via the `lerobot_policy_advantage` plugin. 30%
-   advantage token dropout for classifier-free guidance.
+1. **Collect** (`distal/collect.py`, `distal/collect_libero_plus.py`) — Roll out
+   a base policy in LIBERO via LeRobot's `eval_policy()`, save observations,
+   actions, and per-episode `success` into a LeRobot dataset.
+1. **Maha stats** (`distal/compute_maha_stats.py`) — From the base dataset the
+   policy was trained on, fit Ledoit-Wolf mean / inverse covariance over
+   mean-pooled VLM image-token embeddings (`distal/embedding.py`). Saved as
+   safetensors and cached on the HF Hub.
+1. **Train value** (`distal/train_value.py`) — Distributional value model
+   (`RECAPValueNetwork` in `distal/value_model.py`: SmolVLM + expert + learned
+   value query token + categorical head, vision encoder frozen). Reward signal
+   is either fixed `-1` per step or `distal/maha_reward.py` (Mahalanobis-based
+   `[-1, 0]` rewards). Adapted from the upstream LeRobot
+   `jv/recap-value-network` PR.
+1. **Train PiStar06** (`distal/train_pi_star.py`) — Advantage-conditioned Pi0.5
+   fine-tune. **Advantages are pre-computed in this script** by running the
+   frozen value network once over the dataset, then injected into batches via a
+   frame-index → advantage dict. Caching is content-addressed by
+   `distal/advantage_cache.py` (key = dataset + VN commit SHAs +
+   hyperparameters), with cache files mirrored to a HF Hub `dataset` repo. There
+   is no separate `compute_advantage_labels` step — it lives inside this script.
 
-### Advantage Policy Plugin (`lerobot_policy_advantage/`)
+### PiStar06 Plugin (`lerobot_policy_pistar06/`)
 
-LeRobot plugin that registers the "advantage" policy type:
+LeRobot plugin registering the **`pistar06`** policy type. PiStar06 = Pi0.5
+(`PI05Config`) extended with binary advantage conditioning injected via
+text/embedding into the action expert (`embed_suffix`). Built with flat
+`nn.Module` composition rather than the deep PaliGemma inheritance chain to
+avoid ~3× peak memory during init. Key config knobs: `value_network_checkpoint`,
+`enable_advantage_conditioning` (master switch, persisted in `config.json` so
+inference matches training), `advantage_threshold` (resolved scalar, typically
+auto-set to a per-task percentile during training), `advantage_dropout` (CFG).
 
-- **modeling_advantage.py** — `AdvantagePolicy`: wraps SmolVLA with text-based
-  advantage conditioning ("Advantage: positive"/"negative").
-- **configuration_advantage.py** — `AdvantageConfig` dataclass for policy
-  configuration.
-- **processor_advantage.py** — Delegates to SmolVLA's pre/post processors.
+### Supporting modules (`distal/`)
 
-### Supporting Modules (`distal/`)
-
-- **value_model.py** — `ValueModel` class: SmolVLM + expert with learnable value
-  query token and categorical value head. Vision encoder frozen, VLM + expert
-  trainable.
-- **embedding.py** — VLM prefix extraction for PI05/SmolVLA. Mean-pooled
-  embeddings over image tokens.
-- **compute_maha_stats.py** — Computes Mahalanobis distance statistics (mean,
-  covariance inverse) from embeddings using Ledoit-Wolf covariance.
-- **rollout_value_viz.py** — Roll out base policy in LIBERO with value estimates
-  and Rerun visualization.
-- **visualize.py** — Rerun-based visualization of rollout traces synced with MP4
-  videos.
-- **push_to_hub.py** — Upload trained checkpoints to HuggingFace Hub.
-- **trim_wandb_run.py** — Trim W&B runs by re-logging up to a given step.
-- **hardware/zero.py** — Piper arm initialization/zeroing utility.
-- **hardware/can_activate.py** — Activate and configure CAN interfaces for
-  Piper.
-
-### SLURM Tools (external git dependency)
-
-Separate package (`slurm-tools`) pulled in as a git dependency. Provides cluster
-job management:
-
-- **slurm.py** — SLURM job submission via SSH (fabric). Builds sbatch scripts,
-  rsyncs project to cluster, runs in Singularity containers. Also manages the
-  GUI daemon (start/stop).
-- **gui/app.py** — Flask web UI for monitoring SLURM jobs, GPU availability,
-  streaming logs (SSE).
+- `value_model.py` — `RECAPValueNetwork` (SmolVLM + expert backbone, value query
+  token, categorical head over discretized return bins).
+- `embedding.py` — Mean-pooled VLM prefix embeddings for both PI05 and SmolVLA.
+- `maha_reward.py` — Loads stats from `compute_maha_stats.py`, computes per-
+  frame Mahalanobis distances on a value-training dataset, min-max normalizes to
+  `[-1, 0]` for use as per-step rewards.
+- `maha_auroc.py` — Evaluates Mahalanobis distance as a failure predictor:
+  per-frame distances → episode-mean → AUROC vs `success` labels.
+- `advantage_cache.py` — Content-addressed cache for precomputed advantages,
+  Hub-mirrored.
+- `eval_guidance.py` — Sweeps classifier-free guidance scales by shelling out to
+  `lerobot-eval`.
+- `rollout_value_viz.py` — Rollout + Rerun visualization with value estimates.
+- `push_to_hub.py` — Upload checkpoints / value networks to HF Hub.
+- `plotting/` — Diagnostic scripts: `debug_maha_rewards.py`,
+  `plot_gt_returns.py`. `plot_gt_returns.py` mirrors the exact reward/return
+  construction in `train_value._build_frame_targets` so the plot reflects what
+  the model actually trains against.
+- `hardware/zero.py`, `hardware/can_activate.py` — Piper init / CAN bring-up.
 
 ### Hardware Plugins
 
-Two separate packages registered as LeRobot plugins:
+- `lerobot_robot_piper/` — Piper arm (6-DOF + gripper, CAN bus) + 2× Intel
+  RealSense D435 (wrist + scene, 640×480 @ 30fps). Platform-specific RealSense
+  variants for macOS vs Linux.
+- `lerobot_teleoperator_piper/` — Piper teleop interface for `mise run record`.
 
-- **lerobot_robot_piper/** — Piper arm as a LeRobot robot environment
-  (PiperConfig, Piper class). Handles RealSense cameras with platform-specific
-  variants (macOS/Linux).
-- **lerobot_teleoperator_piper/** — Piper teleoperator interface for recording
-  demonstrations.
+Both packages are commented out from the `dev` group in `pyproject.toml`; sync
+locally only when working on hardware.
 
-### Configuration
+### Configs (`configs/`)
 
-YAML configs in `configs/` drive all workflows:
+YAML configs drive workflows via draccus / LeRobot config parsers:
 
-- `train.yaml` — Dataset, policy type, training hyperparameters, W&B logging
-- `eval.yaml` — Evaluation settings (policy args via CLI override)
-- `advantage_train.yaml` — Advantage-conditioned policy fine-tuning (policy
-  repo, advantage dropout, eval settings)
-- `slurm.yaml` — SLURM job submission settings (cluster paths, resources,
-  container config)
-- `sky.yaml` — SkyPilot cloud training config (cloud provider, accelerator,
-  training task)
-- `play.yaml` / `record.yaml` — Hardware interaction settings
+- `train.yaml` — base SmolVLA training (`mise run train`).
+- `eval.yaml` — LIBERO eval; **policy args must come from CLI**, e.g.
+  `mise run eval` overrides `--policy.path` and `--policy.n_action_steps`.
+- `sky.yaml` / `sky-ssh.yaml` — SkyPilot launch configs (Vast / generic SSH),
+  including LIBERO-plus assets bootstrap.
+- `slurm.yaml` — HTC SLURM submission with Singularity bind mounts.
+- `record.yaml` / `play.yaml` — Hardware workflows.
 
 ### Deployment
 
-Singularity container defined in `container.def` (MuJoCo EGL rendering). Targets
-L40S/H100 GPUs on HTC cluster. Also supports cloud training via SkyPilot (Vast,
-RunPod, etc.). Uses a custom LeRobot fork
-(`reeceomahoney/lerobot@feat/combined-fixes`).
+- **Singularity** (`container.def` → `container.sif`) for the HTC cluster
+  (L40S/H100). Built and uploaded via `mise run container`.
+- **SkyPilot** (`configs/sky*.yaml`) targets Vast / RunPod / etc. The setup
+  block bootstraps `mise`, `uv sync`, and downloads LIBERO assets from the
+  `Sylvest/LIBERO-plus` HF dataset.
 
-## Known VM Issues
+### LeRobot fork
 
-EGL initialization can fail on some RunPod nodes with:
-
-```
-libEGL warning: failed to open /dev/dri/renderD132: Permission denied
-ImportError: Cannot initialize a EGL device display.
-```
-
-Root cause: RunPod VMs run inside Docker containers where `/dev/dri/` devices
-are bind-mounted from the host. On correctly configured nodes, the devices have
-ACLs (`crw-rw----+`) granting container access. On misconfigured nodes, the
-devices are owned by `nobody:nogroup` with no ACL, and `chmod` is blocked on
-bind-mounted devices — so even root cannot fix permissions from inside the
-container. The fix is to tear down and relaunch to get a different node.
+`pyproject.toml` pins `lerobot` to a custom fork:
+`reeceomahoney/lerobot @ distal-libero-plus`. A `distal` branch is also
+available (commented out). Switching branches requires a `uv lock` + `uv sync`.
