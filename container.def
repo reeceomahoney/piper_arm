@@ -6,7 +6,6 @@ From: python:3.10-slim
     uv.lock /opt/distal/uv.lock
     README.md /opt/distal/README.md
     distal /opt/distal/distal
-    lerobot_policy_advantage /opt/distal/lerobot_policy_advantage
     lerobot_policy_pistar06 /opt/distal/lerobot_policy_pistar06
 
 %post
