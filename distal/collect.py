@@ -9,22 +9,25 @@ import math
 import multiprocessing
 import os
 import random
+import re
 
 os.environ["MUJOCO_GL"] = "egl"
 
 import time
-from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
 
 import draccus
+import gymnasium as gym
 import numpy as np
 import torch
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.envs.configs import LiberoEnv as LiberoEnvConfig
-from lerobot.envs.factory import make_env, make_env_pre_post_processors
+from lerobot.envs.factory import make_env_pre_post_processors
+from lerobot.envs.libero import _get_suite, _make_env_fns
+from lerobot.envs.utils import parse_camera_names
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.pi05.modeling_pi05 import PI05Policy
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
@@ -37,35 +40,68 @@ from lerobot.utils.utils import init_logging
 multiprocessing.set_start_method("spawn", force=True)
 
 
-def auto_n_envs(n_episodes: int) -> int:
-    """Pick n_envs based on CPU cores, capped by n_episodes."""
+def auto_parallel_envs() -> int:
+    """Default parallel-env count based on CPU cores."""
     cpu_cores = os.cpu_count() or 4
-    by_cpu = max(1, math.floor(cpu_cores * 0.7))
-    return min(by_cpu, n_episodes, 64)
+    return max(1, min(64, math.floor(cpu_cores * 0.7)))
 
 
 @dataclass
 class EvalDistConfig:
     policy_path: str = "lerobot/pi05-libero"
     base_dataset_repo_id: str = "lerobot/libero"
-    n_episodes: int = 1
-    n_envs: int = 1  # 0 = auto-scale based on CPU cores and n_episodes
     dataset_repo_id: str = "reece-omahoney/pi05-libero-plus"
     device: str = "cuda"
-    max_tasks: int | None = None  # limit number of tasks (None = all)
+    suites: list[str] = field(
+        default_factory=lambda: [
+            "libero_spatial",
+            "libero_object",
+            "libero_goal",
+            "libero_10",
+        ]
+    )
+    # Number of tasks rolled out in parallel within one fat AsyncVectorEnv.
+    # 0 = auto-scale by CPU cores. Each parallel env is a different task from
+    # the same suite, batched into a single GPU policy forward per step.
+    parallel_envs: int = 0
+    max_tasks: int | None = None  # per-suite task limit (None = all)
     per_cell: int = 1  # tasks sampled per (category, difficulty_level) cell
     seed: int = 0
-    use_amp: bool = True
+
+
+# Strips LIBERO-plus perturbation suffixes to recover the base task name.
+# Applied iteratively since combined perturbations stack (e.g. `_table_3_light_5`).
+BASE_TASK_SUFFIX_RE = re.compile(
+    r"("
+    r"_(?:language|view|light)_[a-z0-9_]+?(?:_noise_\d+)?"
+    r"|_(?:table|tb)_\d+"
+    r"|_add_\d+"
+    r"|_(?:moved_)?level\d+_sample\d+"
+    r")+$"
+)
+
+
+def base_task_name(variant_name: str) -> str:
+    prev = None
+    name = variant_name
+    while name != prev:
+        prev = name
+        name = BASE_TASK_SUFFIX_RE.sub("", name)
+    return name
 
 
 def sample_task_ids(suite_name: str, per_cell: int = 1, seed: int = 0) -> list[int]:
-    """Sample task IDs stratified by (category, difficulty_level)."""
+    """Sample task IDs stratified by (base_task, category, difficulty_level)."""
     classif = json.loads(
         (files("libero.libero") / "benchmark" / "task_classification.json").read_text()
     )
     by_cell: dict[tuple, list[int]] = {}
     for entry in classif[suite_name]:
-        key = (entry["category"], entry.get("difficulty_level"))
+        key = (
+            base_task_name(entry["name"]),
+            entry["category"],
+            entry.get("difficulty_level"),
+        )
         by_cell.setdefault(key, []).append(entry["id"])
     rng = random.Random(seed)
     return sorted(
@@ -73,10 +109,47 @@ def sample_task_ids(suite_name: str, per_cell: int = 1, seed: int = 0) -> list[i
     )
 
 
+def make_fat_vec_env(
+    env_cfg: LiberoEnvConfig, task_ids: list[int]
+) -> gym.vector.AsyncVectorEnv:
+    """Build one AsyncVectorEnv with a different task_id in each sub-env.
+
+    All task_ids must come from the same suite (max_episode_steps is read off
+    the first env, so mixing suites would silently truncate or over-run).
+    """
+    suite = _get_suite(env_cfg.task)
+    cameras = parse_camera_names(env_cfg.camera_name)
+    gym_kwargs = dict(env_cfg.gym_kwargs)
+    gym_kwargs.pop("task_ids", None)  # not consumed by env factory
+
+    fns: list = []
+    for tid in task_ids:
+        fns.extend(
+            _make_env_fns(
+                suite=suite,
+                suite_name=env_cfg.task,
+                task_id=tid,
+                n_envs=1,
+                camera_names=cameras,
+                episode_length=env_cfg.episode_length,
+                init_states=env_cfg.init_states,
+                gym_kwargs=gym_kwargs,
+                control_mode=env_cfg.control_mode,
+                camera_name_mapping=env_cfg.camera_name_mapping,
+                is_libero_plus=env_cfg.is_libero_plus,
+            )
+        )
+    return gym.vector.AsyncVectorEnv(fns)
+
+
 def write_episodes_to_dataset(
-    info: dict, dataset: LeRobotDataset, task_desc: str
+    info: dict, dataset: LeRobotDataset, task_descs: list[str]
 ) -> None:
-    """Write episode data returned by lerobot's eval_policy into a LeRobot dataset."""
+    """Write episode data returned by lerobot's eval_policy into a LeRobot dataset.
+
+    `task_descs[i]` is the language instruction for env-index `i`. With
+    `n_episodes == n_envs` there's one episode per env, so `episode_ix == env_ix`.
+    """
     episodes = info["episodes"]
     obs_keys = [k for k in episodes if k.startswith("observation.")]
     features = dataset.meta.features
@@ -97,7 +170,7 @@ def write_episodes_to_dataset(
                     frame[key] = (val.permute(1, 2, 0) * 255).to(torch.uint8)
                 else:
                     frame[key] = val
-            frame["task"] = task_desc
+            frame["task"] = task_descs[ep_ix]
             frame["success"] = np.array([ep_info["success"]], dtype=bool)
             dataset.add_frame(frame)
         dataset.save_episode()
@@ -116,13 +189,18 @@ def main(cfg: EvalDistConfig):
     torch.backends.cuda.matmul.allow_tf32 = True
     set_seed(cfg.seed)
 
-    n_envs = cfg.n_envs if cfg.n_envs > 0 else auto_n_envs(cfg.n_episodes)
-    print(f"Using n_envs={n_envs} (requested={cfg.n_envs})")
+    parallel_envs = cfg.parallel_envs if cfg.parallel_envs > 0 else auto_parallel_envs()
+    print(f"Using parallel_envs={parallel_envs} (requested={cfg.parallel_envs})")
 
     # ── Load policy ──
-    suite_name = "libero_10"
+    # All LIBERO suites share observation/action specs, so the first suite is
+    # a valid representative for building the policy env_cfg.
     env_cfg = LiberoEnvConfig(
-        suite_name, fps=10, observation_height=265, observation_width=265
+        cfg.suites[0],
+        fps=20,
+        observation_height=256,
+        observation_width=256,
+        is_libero_plus=True,
     )
     policy_cfg = PreTrainedConfig.from_pretrained(cfg.policy_path)
     policy_cfg.pretrained_path = Path(cfg.policy_path)
@@ -152,59 +230,75 @@ def main(cfg: EvalDistConfig):
                 "shape": (env_cfg.observation_height, env_cfg.observation_width, 3),
             }
     dataset = LeRobotDataset.create(
-        repo_id=cfg.dataset_repo_id,
-        fps=int(base_meta.fps),
-        features=features,
+        repo_id=cfg.dataset_repo_id, fps=20, features=features
     )
 
     # ── Rollout ──
-    task_ids = sample_task_ids(suite_name, per_cell=cfg.per_cell, seed=cfg.seed)
-    if cfg.max_tasks is not None:
-        task_ids = task_ids[: cfg.max_tasks]
-    n_tasks = len(task_ids)
+    # Process tasks in suite-homogeneous chunks. Within a chunk, build one fat
+    # AsyncVectorEnv where each sub-env is a different task; eval_policy runs
+    # one batched rollout, and the policy does a single batched GPU forward
+    # per step (no thread-safety issues on its action queue).
+    suite_to_ids: dict[str, list[int]] = {}
+    for suite in cfg.suites:
+        ids = sample_task_ids(suite, per_cell=cfg.per_cell, seed=cfg.seed)
+        if cfg.max_tasks is not None:
+            ids = ids[: cfg.max_tasks]
+        suite_to_ids[suite] = ids
+
+    n_tasks = sum(len(v) for v in suite_to_ids.values())
+    n_done = 0
     all_successes: list[bool] = []
     t_start = time.monotonic()
 
-    amp_ctx = (
-        torch.autocast(device_type=device.type, dtype=torch.bfloat16)
-        if cfg.use_amp
-        else nullcontext()
-    )
     try:
-        with torch.no_grad(), amp_ctx:
-            for i, task_id in enumerate(task_ids):
-                task_env_cfg = LiberoEnvConfig(
-                    suite_name,
-                    fps=10,
-                    task_ids=[task_id],
-                    observation_height=265,
-                    observation_width=265,
-                )
-                task_envs = make_env(task_env_cfg, n_envs=n_envs, use_async_envs=True)
-                vec_env = task_envs[suite_name][task_id]
-                task_desc = vec_env.call("task_description")[0]  # ty: ignore[unresolved-attribute]
-                print(f"\nTask {i + 1}/{n_tasks} (id={task_id}): {task_desc}")
+        with torch.no_grad():
+            for suite_name, ids in suite_to_ids.items():
+                for chunk_start in range(0, len(ids), parallel_envs):
+                    chunk = ids[chunk_start : chunk_start + parallel_envs]
 
-                info = lerobot_eval_policy(
-                    env=vec_env,
-                    policy=policy,
-                    env_preprocessor=env_preprocessor,
-                    env_postprocessor=env_postprocessor,
-                    preprocessor=preprocessor,
-                    postprocessor=postprocessor,
-                    n_episodes=cfg.n_episodes,
-                    return_episode_data=dataset is not None,
-                    start_seed=cfg.seed,
-                )
+                    chunk_cfg = LiberoEnvConfig(
+                        suite_name,
+                        fps=20,
+                        observation_height=256,
+                        observation_width=256,
+                        is_libero_plus=True,
+                    )
+                    vec_env = make_fat_vec_env(chunk_cfg, chunk)
+                    task_descs = list(vec_env.call("task_description"))
+                    n_done += len(chunk)
+                    print(
+                        f"\n[{n_done}/{n_tasks}] suite={suite_name} "
+                        f"chunk={len(chunk)} tasks (ids {chunk[0]}..{chunk[-1]})"
+                    )
 
-                task_successes = [ep["success"] for ep in info["per_episode"]]
-                all_successes.extend(task_successes)
-                n_success = sum(task_successes)
-                n = len(task_successes)
-                print(f"  Success rate: {n_success}/{n} ({100 * n_success / n:.1f}%)")
+                    info = lerobot_eval_policy(
+                        env=vec_env,
+                        policy=policy,
+                        env_preprocessor=env_preprocessor,
+                        env_postprocessor=env_postprocessor,
+                        preprocessor=preprocessor,
+                        postprocessor=postprocessor,
+                        n_episodes=len(chunk),
+                        return_episode_data=True,
+                        start_seed=cfg.seed,
+                    )
 
-                write_episodes_to_dataset(info, dataset, task_desc)
-                vec_env.close()
+                    chunk_successes = [ep["success"] for ep in info["per_episode"]]
+                    all_successes.extend(chunk_successes)
+                    n_success = sum(chunk_successes)
+                    n = len(chunk_successes)
+                    elapsed = time.monotonic() - t_start
+                    overall_pct = 100 * sum(all_successes) / len(all_successes)
+                    eta = elapsed / n_done * (n_tasks - n_done) if n_done else 0
+                    print(
+                        f"  Chunk: {n_success}/{n} ({100 * n_success / n:.1f}%) | "
+                        f"Overall: {sum(all_successes)}/{len(all_successes)} "
+                        f"({overall_pct:.1f}%) | "
+                        f"Elapsed: {elapsed / 60:.1f}min | ETA: {eta / 60:.1f}min"
+                    )
+
+                    write_episodes_to_dataset(info, dataset, task_descs)
+                    vec_env.close()
     finally:
         dataset.finalize()
         print(
