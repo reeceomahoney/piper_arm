@@ -84,7 +84,7 @@ class RECAPPiStarTrainingConfig:
     learning_rate: float = 2e-4
     decay_learning_rate: float = 2e-5
     weight_decay: float = 1e-8
-    warmup_steps = 1000
+    warmup_steps: int = 1000
     max_grad_norm: float = 1.0
     val_split_ratio: float = 0.1
     seed: int = 42
@@ -166,12 +166,19 @@ def _init_wandb(cfg: RECAPPiStarTrainingConfig):
     """Initialise a W&B run if ``wandb_project`` is set, otherwise return ``None``."""
     if cfg.wandb_project is None:
         return None
+    import os
+
     import wandb
+
+    # Under a sweep agent, let wandb auto-generate a unique trial name
+    # rather than collapsing every trial to the same `wandb_run_name`.
+    in_sweep = "WANDB_SWEEP_ID" in os.environ
+    name = None if (in_sweep or not cfg.wandb_run_name) else cfg.wandb_run_name
 
     run = wandb.init(
         project=cfg.wandb_project,
         entity=cfg.wandb_entity,
-        name=cfg.wandb_run_name,
+        name=name,
         config=asdict(cfg),
     )
     logging.info(f"W&B run: {run.url}")

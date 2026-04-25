@@ -51,7 +51,16 @@ sky launch configs/sky-ssh.yaml -y --env HF_TOKEN --env WANDB_API_KEY
 
 [tasks.container]
 description = "Build Singularity container and upload to cluster"
+# Default /tmp is a 32G tmpfs — too tight for squashfs assembly of a CUDA image.
+# Redirect tmp/cache to $HOME (475G partition).
+env = { SINGULARITY_TMPDIR = "{{ env.HOME }}/.cache/singularity/tmp", SINGULARITY_CACHEDIR = "{{ env.HOME }}/.cache/singularity/cache" }
 run = """
+mkdir -p "$SINGULARITY_TMPDIR" "$SINGULARITY_CACHEDIR"
 singularity build --force --fakeroot container.sif container.def
 scp container.sif htc:/data/engs-robotics-ml/kebl6123/distal/container.sif
 """
+
+[tasks.sweep]
+description = "Create wandb sweep and submit N SLURM agents (default 5)"
+usage = 'arg "[n_agents]"'
+run = "./scripts/launch_sweep.sh {{ usage.n_agents | default(value='5') }}"

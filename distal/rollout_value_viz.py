@@ -22,7 +22,6 @@ from lerobot.utils.constants import ACTION
 from lerobot.utils.utils import inside_slurm
 from tqdm import tqdm
 
-import lerobot_policy_advantage as lerobot_policy_advantage
 from distal.value_model import RECAPValueNetwork
 
 
