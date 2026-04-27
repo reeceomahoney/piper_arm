@@ -64,3 +64,7 @@ scp container.sif htc:/data/engs-robotics-ml/kebl6123/distal/container.sif
 description = "Create wandb sweep and submit N SLURM agents (default 5)"
 usage = 'arg "[n_agents]"'
 run = "./scripts/launch_sweep.sh {{ usage.n_agents | default(value='5') }}"
+
+[tasks.collect]
+description = "Fan out LIBERO-plus collection across one sky cluster per suite, then merge"
+run = "./scripts/launch_collect.sh"

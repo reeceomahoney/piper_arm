@@ -2,7 +2,7 @@ name: distal-train
 
 resources:
   cloud: vast
-  accelerators: H100
+  accelerators: RTXPRO6000WS
   disk_size: 128
   autostop:
     idle_minutes: 10
@@ -13,7 +13,9 @@ envs:
   WANDB_API_KEY:
   MUJOCO_GL: egl
   PYOPENGL_PLATFORM: egl
-  # SLURM_JOB_ID: 0  # suppress tqdm
+  SLURM_JOB_ID: 0  # suppress tqdm
+  SUITE: libero_spatial
+  DATASET_REPO_ID: reece-omahoney/pi05-libero-plus
 workdir: .
 
 setup: |
@@ -65,4 +67,7 @@ setup: |
 
 run: |
   cd ~/sky_workdir
-  uv run distal/train_pi_star.py
+  uv run distal/collect_libero_plus.py \
+    --parallel_envs 16 \
+    --suites "[$SUITE]" \
+    --dataset_repo_id "$DATASET_REPO_ID"
