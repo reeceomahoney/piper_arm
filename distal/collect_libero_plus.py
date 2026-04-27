@@ -19,6 +19,7 @@ from importlib.resources import files
 from pathlib import Path
 
 import draccus
+import gym_notices.notices
 import gymnasium as gym
 import numpy as np
 import torch
@@ -37,6 +38,8 @@ from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.random_utils import set_seed
 from lerobot.utils.utils import init_logging
 
+# Suppress gym 0.26 deprecation banner (libero pulls in legacy gym transitively).
+gym_notices.notices.notices.clear()
 multiprocessing.set_start_method("spawn", force=True)
 
 

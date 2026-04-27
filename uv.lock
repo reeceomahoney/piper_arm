@@ -681,6 +681,7 @@ name = "distal"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "future" },
     { name = "google-api-python-client" },
     { name = "google-cloud-tpu" },
     { name = "lerobot", extra = ["libero", "pi", "smolvla", "training"] },
@@ -710,6 +711,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "future", specifier = ">=1.0.0" },
     { name = "google-api-python-client", specifier = ">=2.193.0" },
     { name = "google-cloud-tpu", specifier = ">=1.26.0" },
     { name = "lerobot", extras = ["libero", "pi", "smolvla", "training"], git = "https://github.com/reeceomahoney/lerobot?branch=distal-libero-plus" },
