@@ -19,8 +19,6 @@ parameters:
     value: 64
   epochs:
     value: 2
-  reward_mode:
-    value: steps                      # sweep one reward mode at a time
   push_to_hub:
     value: false                      # don't overwrite the hub repo every trial
   wandb_run_name:
