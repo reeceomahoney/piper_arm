@@ -1,6 +1,6 @@
 """Compute Mahalanobis statistics (mean, cov_inv) from a dataset and save to disk."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Union
 
@@ -13,6 +13,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.pi05.modeling_pi05 import PI05Policy
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+from lerobot.processor import rename_stats
 from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.utils import init_logging, inside_slurm
@@ -112,12 +113,18 @@ def fit_gaussian_from_dataset(
 @dataclass
 class MahaStatsConfig:
     policy_path: str = "lerobot/pi05-libero"
-    dataset_repo_id: str = "lerobot/libero"
-    hub_repo_id: str = "reece-omahoney/pi05-maha-stats"
+    dataset_repo_id: str = "lerobot/libero_plus"
+    hub_repo_id: str = "reece-omahoney/pi05-libero-plus-maha-stats"
     output_path: str = "outputs/maha/stats.safetensors"
     device: str = "cuda"
     batch_size: int = 512
     num_workers: int = 32
+    rename_map: dict[str, str] = field(
+        default_factory=lambda: {
+            "observation.images.front": "observation.images.image",
+            "observation.images.wrist": "observation.images.image2",
+        }
+    )
 
 
 @draccus.wrap()
@@ -137,12 +144,19 @@ def main(cfg: MahaStatsConfig):
     policy_cfg.pretrained_path = Path(cfg.policy_path)
     policy_cfg.device = str(device)
 
-    policy = make_policy(cfg=policy_cfg, ds_meta=dataset.meta)
+    policy = make_policy(
+        cfg=policy_cfg, ds_meta=dataset.meta, rename_map=cfg.rename_map
+    )
     assert isinstance(policy, (PI05Policy, SmolVLAPolicy))
     policy.eval()
 
     preprocessor, _ = make_pre_post_processors(
-        policy_cfg=policy_cfg, pretrained_path=str(policy_cfg.pretrained_path)
+        policy_cfg=policy_cfg,
+        pretrained_path=str(policy_cfg.pretrained_path),
+        dataset_stats=rename_stats(dataset.meta.stats or {}, cfg.rename_map),
+        preprocessor_overrides={
+            "rename_observations_processor": {"rename_map": cfg.rename_map},
+        },
     )
 
     # Compute stats
