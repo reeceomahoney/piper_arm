@@ -79,11 +79,11 @@ class RECAPPiStarTrainingConfig:
     episodes: list[int] | None = None
 
     epochs: int = 5
-    batch_size: int = 64
-    num_workers: int = 4
-    learning_rate: float = 2e-4
-    decay_learning_rate: float = 2e-5
-    lr_decay: bool = True
+    batch_size: int = 128
+    num_workers: int = 8
+    learning_rate: float = 1e-4
+    decay_learning_rate: float = 1e-5
+    lr_decay: bool = False
     weight_decay: float = 1e-8
     warmup_steps: int = 1000
     max_grad_norm: float = 1.0
