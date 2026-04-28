@@ -17,8 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 BASE_REPO_ID="${DATASET_REPO_ID:-reece-omahoney/pi05-libero-plus}"
-# SUITES=(libero_spatial libero_object libero_goal libero_10)
-SUITES=(libero_spatial libero_object)
+SUITES=(libero_spatial libero_object libero_goal libero_10)
 
 if [[ -z "${HF_TOKEN:-}" ]]; then
   echo "ERROR: HF_TOKEN not set in local env" >&2
