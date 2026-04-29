@@ -41,11 +41,22 @@ multiprocessing.set_start_method("spawn", force=True)
 
 
 def available_cpus() -> int:
-    """Effective vCPU count: cgroup v2 quota (Vast/Docker) or affinity (SLURM)."""
-    with open("/sys/fs/cgroup/cpu.max") as f:
-        quota, period = f.read().split()
-    if quota != "max":
-        return max(1, int(int(quota) / int(period)))
+    """Effective vCPU count: cgroup quota (Vast/Docker) or affinity (SLURM)."""
+    try:
+        with open("/sys/fs/cgroup/cpu.max") as f:
+            quota, period = f.read().split()
+        if quota != "max":
+            return max(1, int(int(quota) / int(period)))
+    except FileNotFoundError:
+        try:
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as f:
+                quota_us = int(f.read())
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as f:
+                period_us = int(f.read())
+            if quota_us > 0:
+                return max(1, quota_us // period_us)
+        except FileNotFoundError:
+            pass
     return len(os.sched_getaffinity(0))
 
 
