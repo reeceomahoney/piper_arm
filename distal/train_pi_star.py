@@ -30,7 +30,6 @@ import json
 import logging
 import resource
 import time as time_module
-from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -45,7 +44,6 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.sampler import EpisodeAwareSampler
 from lerobot.envs.configs import LiberoEnv
 from lerobot.envs.factory import make_env_pre_post_processors
-from lerobot.scripts.lerobot_eval import eval_policy as lerobot_eval_policy
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE_TOKENS
 from lerobot.utils.feature_utils import dataset_to_policy_features
 from lerobot_policy_pistar06.modeling_pistar06 import PiStar06Policy
@@ -54,12 +52,7 @@ from torch.utils.data import DataLoader
 
 from distal import advantage_cache
 from distal import train_value as base
-from distal.collect_libero_plus import (
-    auto_parallel_envs,
-    base_task_name,
-    make_fat_vec_env,
-    sample_task_ids,
-)
+from distal.sim_eval import resolve_eval_task_ids, run_sim_eval
 from distal.value_model import RECAPValueConfig, RECAPValueNetwork
 
 
@@ -84,7 +77,7 @@ class RECAPPiStarTrainingConfig:
     revision: str | None = None
     episodes: list[int] | None = None
 
-    epochs: int = 6
+    epochs: int = 5
     batch_size: int = 128
     num_workers: int = 8
     learning_rate: float = 1e-4
@@ -180,7 +173,7 @@ class RECAPPiStarTrainingConfig:
     # IDs are filtered to only those whose base name matches.
     eval_base_task: str | None = "turn_on_the_stove"
     eval_parallel_envs: int = 0  # libero-plus only; 0 = auto-scale by CPU cores
-    eval_n_envs_per_task: int = 1  # base-LIBERO only
+    eval_n_envs_per_task: int = 0  # base-LIBERO only
     eval_n_episodes_per_task: int = 1
 
     # Hub push for trained PiStar06 policy
@@ -191,33 +184,6 @@ class RECAPPiStarTrainingConfig:
     wandb_project: str | None = "distal"
     wandb_entity: str | None = None
     wandb_run_name: str | None = "pistar06-libero-plus-steps"
-
-
-def _resolve_eval_task_ids(
-    suite_name: str, cfg: RECAPPiStarTrainingConfig
-) -> list[int]:
-    """Sample task IDs for a suite, then optionally filter to one base task."""
-    ids = sample_task_ids(
-        suite_name, per_cell=cfg.eval_per_cell, seed=cfg.eval_task_seed
-    )
-    if cfg.eval_base_task is not None:
-        from importlib.resources import files
-
-        classif = json.loads(
-            (
-                files("libero.libero") / "benchmark" / "task_classification.json"
-            ).read_text()
-        )
-        id_to_base = {e["id"]: base_task_name(e["name"]) for e in classif[suite_name]}
-        ids = [i for i in ids if id_to_base[i] == cfg.eval_base_task]
-        if not ids:
-            raise ValueError(
-                f"eval_base_task={cfg.eval_base_task!r} matched no task IDs "
-                f"in suite {suite_name!r}"
-            )
-    if cfg.eval_max_tasks is not None:
-        ids = ids[: cfg.eval_max_tasks]
-    return ids
 
 
 def _init_wandb(cfg: RECAPPiStarTrainingConfig):
@@ -727,167 +693,6 @@ def _log_val_metrics(tag: str, metrics: dict[str, float]) -> None:
     )
 
 
-def _run_sim_eval(
-    *,
-    policy,
-    env_preprocessor,
-    env_postprocessor,
-    preprocessor,
-    postprocessor,
-    cfg: RECAPPiStarTrainingConfig,
-    step: int,
-    output_dir: Path,
-    wandb_run=None,
-) -> dict[str, float]:
-    """Roll out policy in LIBERO using fat ``AsyncVectorEnv``s.
-
-    Two modes, controlled by ``cfg.is_libero_plus``:
-
-    - libero-plus: each chunk packs up to ``eval_parallel_envs`` distinct task
-      IDs (1 env each) into one vec env, batched into a single GPU forward per
-      step. Task IDs come from ``sample_task_ids(per_cell, seed)`` and match
-      the rollout dataset whenever those knobs match collect's settings.
-    - base LIBERO: 10 tasks per suite, each task gets its own vec env with
-      ``eval_n_envs_per_task`` sub-envs (distinct ``episode_index`` → distinct
-      init states). Standard LIBERO eval protocol.
-    """
-    parallel_envs = (
-        cfg.eval_parallel_envs if cfg.eval_parallel_envs > 0 else auto_parallel_envs()
-    )
-    logging.info(
-        f"Running sim eval at global_step={step} "
-        f"(is_libero_plus={cfg.is_libero_plus}, "
-        f"parallel_envs={parallel_envs}, "
-        f"n_envs_per_task={cfg.eval_n_envs_per_task}, "
-        f"n_ep_per_task={cfg.eval_n_episodes_per_task})"
-    )
-    policy.eval()
-
-    suite_metrics: dict[str, dict[str, list[float]]] = defaultdict(
-        lambda: {"successes": [], "sum_rewards": []}
-    )
-    rendered = 0
-    max_to_render = 4
-    first_video_path: str | None = None
-    t0 = time_module.monotonic()
-
-    with torch.no_grad():
-        for suite_name in cfg.eval_suites:
-            if cfg.is_libero_plus:
-                ids = _resolve_eval_task_ids(suite_name, cfg)
-                chunks = [
-                    ids[i : i + parallel_envs]
-                    for i in range(0, len(ids), parallel_envs)
-                ]
-                n_envs_per_task = 1
-            else:
-                ids = list(range(10))
-                if cfg.eval_max_tasks is not None:
-                    ids = ids[: cfg.eval_max_tasks]
-                chunks = [[tid] for tid in ids]
-                n_envs_per_task = (
-                    cfg.eval_n_envs_per_task
-                    if cfg.eval_n_envs_per_task > 0
-                    else parallel_envs
-                )
-
-            env_cfg = LiberoEnv(
-                task=suite_name,
-                fps=cfg.eval_fps,
-                observation_height=cfg.eval_observation_height,
-                observation_width=cfg.eval_observation_width,
-                is_libero_plus=cfg.is_libero_plus,
-            )
-
-            for chunk_idx, chunk in enumerate(chunks):
-                vec_env = make_fat_vec_env(
-                    env_cfg, chunk, n_envs_per_task=n_envs_per_task
-                )
-                try:
-                    chunk_videos_dir: Path | None = None
-                    chunk_max_render = 0
-                    if rendered < max_to_render:
-                        chunk_videos_dir = (
-                            output_dir
-                            / "eval"
-                            / f"videos_step_{step}"
-                            / f"{suite_name}_{chunk_idx}"
-                        )
-                        chunk_max_render = max_to_render - rendered
-
-                    info = lerobot_eval_policy(
-                        env=vec_env,
-                        policy=policy,
-                        env_preprocessor=env_preprocessor,
-                        env_postprocessor=env_postprocessor,
-                        preprocessor=preprocessor,
-                        postprocessor=postprocessor,
-                        n_episodes=(
-                            len(chunk) * n_envs_per_task * cfg.eval_n_episodes_per_task
-                        ),
-                        max_episodes_rendered=chunk_max_render,
-                        videos_dir=chunk_videos_dir,
-                        start_seed=cfg.seed,
-                    )
-                    for ep in info["per_episode"]:
-                        suite_metrics[suite_name]["successes"].append(
-                            float(ep["success"])
-                        )
-                        suite_metrics[suite_name]["sum_rewards"].append(
-                            float(ep["sum_reward"])
-                        )
-                    chunk_videos = info.get("video_paths", [])
-                    if first_video_path is None and chunk_videos:
-                        first_video_path = chunk_videos[0]
-                    rendered += len(chunk_videos)
-                finally:
-                    vec_env.close()
-
-    eval_s = time_module.monotonic() - t0
-
-    overall_succ = [s for m in suite_metrics.values() for s in m["successes"]]
-    overall_rew = [r for m in suite_metrics.values() for r in m["sum_rewards"]]
-    pc_success = float(np.mean(overall_succ) * 100) if overall_succ else float("nan")
-    avg_sum_reward = float(np.mean(overall_rew)) if overall_rew else float("nan")
-
-    metrics: dict[str, float] = {
-        "eval_s": eval_s,
-        "avg_sum_reward": avg_sum_reward,
-        "pc_success": pc_success,
-    }
-    for suite_name, m in suite_metrics.items():
-        suite_succ = (
-            float(np.mean(m["successes"]) * 100) if m["successes"] else float("nan")
-        )
-        suite_rew = (
-            float(np.mean(m["sum_rewards"])) if m["sum_rewards"] else float("nan")
-        )
-        metrics[f"pc_success_{suite_name}"] = suite_succ
-        metrics[f"avg_sum_reward_{suite_name}"] = suite_rew
-        logging.info(
-            f"Suite {suite_name}: pc_success={suite_succ:.1f}% "
-            f"avg_sum_reward={suite_rew:.3f} (n={len(m['successes'])})"
-        )
-    logging.info(
-        f"Overall: pc_success={pc_success:.1f}% avg_sum_reward={avg_sum_reward:.3f} "
-        f"(n={len(overall_succ)}) eval_s={eval_s:.1f}"
-    )
-
-    if wandb_run is not None and first_video_path is not None:
-        import wandb
-
-        wandb_run.log(
-            {
-                "eval/video": wandb.Video(
-                    str(first_video_path), fps=cfg.eval_fps, format="mp4"
-                )
-            },
-            step=step,
-        )
-
-    return metrics
-
-
 # ── Main training loop ───────────────────────────────────────────────────────
 
 
@@ -1206,7 +1011,13 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
                 f"base_task={cfg.eval_base_task})"
             )
             for suite in cfg.eval_suites:
-                ids = _resolve_eval_task_ids(suite, cfg)
+                ids = resolve_eval_task_ids(
+                    suite,
+                    per_cell=cfg.eval_per_cell,
+                    task_seed=cfg.eval_task_seed,
+                    base_task=cfg.eval_base_task,
+                    max_tasks=cfg.eval_max_tasks,
+                )
                 logging.info(f"  {suite}: {len(ids)} task IDs")
         else:
             logging.info(
@@ -1440,16 +1251,28 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
                 cfg.sim_eval_every_n_train_steps > 0
                 and global_train_step % cfg.sim_eval_every_n_train_steps == 0
             ):
-                step_eval_metrics = _run_sim_eval(
+                step_eval_metrics = run_sim_eval(
                     policy=policy,
                     env_preprocessor=env_preprocessor,
                     env_postprocessor=env_postprocessor,
                     preprocessor=preprocessor,
                     postprocessor=postprocessor,
-                    cfg=cfg,
-                    step=global_train_step,
-                    output_dir=output_dir,
+                    suites=cfg.eval_suites,
+                    is_libero_plus=cfg.is_libero_plus,
+                    fps=cfg.eval_fps,
+                    observation_height=cfg.eval_observation_height,
+                    observation_width=cfg.eval_observation_width,
+                    per_cell=cfg.eval_per_cell,
+                    task_seed=cfg.eval_task_seed,
+                    base_task=cfg.eval_base_task,
+                    max_tasks=cfg.eval_max_tasks,
+                    parallel_envs=cfg.eval_parallel_envs,
+                    n_envs_per_task=cfg.eval_n_envs_per_task,
+                    n_episodes_per_task=cfg.eval_n_episodes_per_task,
+                    seed=cfg.seed,
+                    videos_dir=output_dir / "eval" / f"videos_step_{global_train_step}",
                     wandb_run=wandb_run,
+                    wandb_step=global_train_step,
                 )
                 wandb_step_metrics.update(
                     {f"eval/{k}": v for k, v in step_eval_metrics.items()}
