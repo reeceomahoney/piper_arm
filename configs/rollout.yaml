@@ -2,7 +2,7 @@ strategy:
   type: base
 
 inference:
-  type: sync
+  type: rtc
 
 robot:
   type: piper
@@ -10,3 +10,4 @@ robot:
 
 fps: 20
 task: Remove the pen lid
+use_torch_compile: true
