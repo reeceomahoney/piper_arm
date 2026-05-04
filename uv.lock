@@ -1629,7 +1629,7 @@ wheels = [
 [[package]]
 name = "lerobot"
 version = "0.5.2"
-source = { git = "https://github.com/reeceomahoney/lerobot?branch=distal-libero-plus#14eef72a6e1d7d1f178c9e8522352908113cb14a" }
+source = { git = "https://github.com/reeceomahoney/lerobot?branch=distal-libero-plus#d688a639433f928bad07608bc2a1ba15901da9bd" }
 dependencies = [
     { name = "cmake" },
     { name = "draccus" },
