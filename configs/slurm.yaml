@@ -17,10 +17,6 @@ command: |-
   export OPENBLAS_NUM_THREADS=8
   export OMP_NUM_THREADS=8
   export MKL_NUM_THREADS=8
-
-  # install uv and pixi
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  curl -fsSL https://pixi.sh/install.sh | bash
   export PATH="$HOME/.local/bin:$HOME/.pixi/bin:$PWD/.pixi/envs/default/bin:$PATH"
 
   # install packacges

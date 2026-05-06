@@ -3294,7 +3294,7 @@ vast = [
 [[package]]
 name = "slurm-tools"
 version = "0.1.0"
-source = { git = "https://github.com/reeceomahoney/slurm-tools.git#5ef285d84e744755465a4d0ef4b641c603c10edd" }
+source = { git = "https://github.com/reeceomahoney/slurm-tools.git#c8a7753395cae6586dfc421527a6b1366ad0b2a4" }
 dependencies = [
     { name = "draccus" },
     { name = "flask" },
