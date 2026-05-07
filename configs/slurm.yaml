@@ -11,18 +11,16 @@ partition: workq
 envs:
   - WANDB_API_KEY
   - HF_TOKEN
+  - MUJOCO_GL: egl
+  - OPENBLAS_NUM_THREADS: 8
+  - OMP_NUM_THREADS: 8
+  - MKL_NUM_THREADS: 8
+  - PATH: $HOME/.local/bin:$HOME/.pixi/bin:$PWD/.pixi/envs/default/bin:$PATH
+  - LD_LIBRARY_PATH: $PWD/.pixi/envs/default/lib:$LD_LIBRARY_PATH
 command: |-
-  # modules and env vars
   module load cuda/12.6
-  export OPENBLAS_NUM_THREADS=8
-  export OMP_NUM_THREADS=8
-  export MKL_NUM_THREADS=8
-  export PATH="$HOME/.local/bin:$HOME/.pixi/bin:$PWD/.pixi/envs/default/bin:$PATH"
-
-  # install packacges
   uv sync
   pixi install
-  export LD_LIBRARY_PATH="$PWD/.pixi/envs/default/lib:$LD_LIBRARY_PATH"
 
   # run command
-  uv run distal/train_value.py
+  uv run distal/compute_maha_stats.py
