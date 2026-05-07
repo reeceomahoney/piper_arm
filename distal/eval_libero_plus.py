@@ -33,7 +33,7 @@ from distal.sim_eval import run_sim_eval
 
 @dataclass
 class EvalLiberoPlusConfig:
-    policy_path: str = "reece-omahoney/pistar06-libero-plus-steps"
+    policy_path: str = "reece-omahoney/pistar06-libero-plus-maha"
     n_action_steps: int = 10
     cfg_beta: float | None = None
     device: str = "cuda"
@@ -49,7 +49,7 @@ class EvalLiberoPlusConfig:
     task_seed: int = 0
 
     # Optional task-set restrictions.
-    base_task: str | None = None
+    base_task: str | None = "turn_on_the_stove"
     max_tasks: int | None = None
 
     # Parallelism: 0 = auto-scale by CPU cores. Each chunk packs up to
