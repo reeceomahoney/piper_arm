@@ -8,3 +8,95 @@ version = "0.1.0"
 [dependencies]
 ffmpeg = ">=8.1.1,<9"
 imagemagick = ">=7.1.2_21,<8"
+
+# Tasks. Python entries run via `uv run` so they pick up the uv-managed
+# `.venv`; pixi's env supplies ffmpeg/imagemagick on PATH.
+
+# Training
+
+[tasks.train]
+description = "Train base policy"
+cmd = """
+uv run accelerate launch --multi_gpu --num_processes=2 \
+  -m lerobot.scripts.lerobot_train --config_path configs/train.yaml \
+  --policy.type=pi05 \
+  --policy.repo_id=reece-omahoney/pi05-remove-pen-lid \
+  --policy.pretrained_path=lerobot/pi05_base \
+  --policy.n_action_steps=10 \
+  --policy.compile_model=true \
+  --policy.gradient_checkpointing=true \
+  --policy.dtype=bfloat16 \
+  --policy.freeze_vision_encoder=false \
+  --policy.train_expert_only=false
+"""
+
+[tasks.eval]
+description = "Evaluate policy in LIBERO sim"
+cmd = """
+uv run lerobot-eval --config_path configs/eval.yaml \
+  --policy.path=lerobot/pi05-libero \
+  --policy.n_action_steps=10
+"""
+
+# Hardware
+
+[tasks.record]
+description = "Record demonstrations via teleop"
+cmd = "uv run lerobot-record --config_path configs/record.yaml"
+
+[tasks.rollout]
+description = "Rollout trained policy on physical arm"
+cmd = """
+uv run lerobot-rollout --config_path configs/rollout.yaml \
+  --policy.path=reece-omahoney/pi05-remove-pen-lid \
+  --policy.n_action_steps=20
+"""
+
+# Cluster
+
+[tasks.sky]
+description = "Launch on Vast via SkyPilot, or sky exec on existing cluster_id"
+args = [{ "arg" = "cluster_id", "default" = "" }]
+cmd = """
+if [ -n "{{ cluster_id }}" ]; then
+  uv run sky exec {{ cluster_id }} configs/sky.yaml --env HF_TOKEN --env WANDB_API_KEY
+else
+  uv run sky launch configs/sky.yaml -y --env HF_TOKEN --env WANDB_API_KEY
+fi
+"""
+
+[tasks.sky-ssh]
+description = "Same as sky but via SSH cloud config"
+args = [{ "arg" = "cluster_id", "default" = "" }]
+cmd = """
+if [ -n "{{ cluster_id }}" ]; then
+  uv run sky exec {{ cluster_id }} configs/sky-ssh.yaml --env HF_TOKEN --env WANDB_API_KEY
+else
+  uv run sky launch configs/sky-ssh.yaml -y --env HF_TOKEN --env WANDB_API_KEY
+fi
+"""
+
+[tasks.container]
+description = "Build Singularity container and upload to cluster"
+# Default /tmp is a 32G tmpfs — too tight for squashfs assembly of a CUDA image.
+# Redirect tmp/cache to $HOME (475G partition).
+cmd = """
+export SINGULARITY_TMPDIR="$HOME/.cache/singularity/tmp"
+export SINGULARITY_CACHEDIR="$HOME/.cache/singularity/cache"
+mkdir -p "$SINGULARITY_TMPDIR" "$SINGULARITY_CACHEDIR"
+singularity build --force --fakeroot container.sif container.def
+scp container.sif htc:/data/engs-robotics-ml/kebl6123/distal/container.sif
+"""
+
+[tasks.download-assets]
+description = "Submit SLURM job to populate LIBERO-plus assets in HTC cache"
+cmd = "ssh htc 'cd /data/engs-robotics-ml/kebl6123/distal && mkdir -p slurm && cat > slurm/download_assets.sh && sbatch slurm/download_assets.sh' < scripts/download_assets.sh"
+
+[tasks.sweep]
+description = "Create wandb sweep and submit N SLURM agents (default 5)"
+args = [{ "arg" = "n_agents", "default" = "5" }]
+cmd = "./scripts/launch_sweep.sh {{ n_agents }}"
+
+[tasks.collect]
+description = "Fan out LIBERO-plus collection across one sky cluster per suite, then merge"
+cmd = "./scripts/launch_collect.sh"

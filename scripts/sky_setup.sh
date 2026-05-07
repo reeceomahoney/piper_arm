@@ -14,12 +14,9 @@ sudo apt-get update && sudo apt-get install -y \
   libopengl0 \
   unzip
 
-curl https://mise.run | sh
-echo 'eval "$($HOME/.local/bin/mise activate bash)"' >> ~/.bashrc
+curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
-eval "$(mise activate bash)"
 cd ~/sky_workdir
-mise trust
 
 uv sync
 
@@ -45,4 +42,4 @@ init_states: $HOME/sky_workdir/.venv/lib/python3.12/site-packages/libero/libero/
 EOF
 
 cd ~/sky_workdir
-python ~/sky_workdir/.venv/lib/python3.12/site-packages/robosuite/scripts/setup_macros.py
+uv run python ~/sky_workdir/.venv/lib/python3.12/site-packages/robosuite/scripts/setup_macros.py

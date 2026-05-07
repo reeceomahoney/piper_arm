@@ -9,7 +9,7 @@
 
 # Populate the host-side libero cache so the Singularity container can find
 # LIBERO-plus assets without baking them into the image. Submit once on HTC
-# via `mise run bootstrap-libero`.
+# via `pixi run download-assets`.
 set -euo pipefail
 
 CACHE_DIR="${CACHE_DIR:-/data/engs-robotics-ml/kebl6123/.cache}"

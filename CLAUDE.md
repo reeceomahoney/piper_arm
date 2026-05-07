@@ -10,15 +10,17 @@ conditioning and Mahalanobis-distance-based rewards, built on a fork of
 HuggingFace LeRobot. Primary evaluation target is LIBERO simulation; also
 supports a physical Piper arm.
 
-**Python 3.12** (`>=3.12,<3.13`). **uv** package manager (frozen `uv.lock`),
-**mise** task runner.
+**Python 3.12** (`>=3.12,<3.13`). **uv** for Python packages (frozen `uv.lock`).
+**pixi** for conda-forge system binaries (ffmpeg, imagemagick) and as the task
+runner — see `[tasks]` in `pixi.toml`. Pixi tasks shell out via `uv run` so the
+uv-managed `.venv` is the source of truth for Python.
 
 ## Common Commands
 
 ```bash
 # Base policy training & evaluation
-mise run train                           # lerobot-train using configs/train.yaml
-mise run eval                            # lerobot-eval in LIBERO sim (pi05-libero default)
+pixi run train                           # lerobot-train using configs/train.yaml
+pixi run eval                            # lerobot-eval in LIBERO sim (pi05-libero default)
 
 # RECAP pipeline (run directly via uv, not lerobot-train)
 uv run python -m distal.collect          # rollouts → LeRobot dataset
@@ -30,13 +32,13 @@ uv run python -m distal.maha_auroc              # Mahalanobis distance AUROC vs 
 uv run python -m distal.eval_guidance           # sweep guidance scales
 
 # Hardware (Piper)
-mise run record                          # teleop demos
-mise run play                            # play trained policy on the arm
+pixi run record                          # teleop demos
+pixi run rollout                         # play trained policy on the arm
 
 # Cluster / cloud
-mise run sky [cluster_id]                # launch on Vast via SkyPilot, or sky exec on existing
-mise run sky-ssh [cluster_id]            # same but via SSH cloud
-mise run container                       # build container.sif and scp to HTC
+pixi run sky [cluster_id]                # launch on Vast via SkyPilot, or sky exec on existing
+pixi run sky-ssh [cluster_id]            # same but via SSH cloud
+pixi run container                       # build container.sif and scp to HTC
 uv run slurm run                         # SLURM submit (slurm-tools git dep)
 uv run slurm gui [stop]                  # Flask job-monitor daemon
 
@@ -44,7 +46,7 @@ uv run slurm gui [stop]                  # Flask job-monitor daemon
 uv run pre-commit run --all-files        # ruff (E,F,I + format), check-toml/yaml, mdformat --wrap 80, ty
 ```
 
-No formal test suite — verification is via `mise run eval` and the `maha_auroc`
+No formal test suite — verification is via `pixi run eval` and the `maha_auroc`
 diagnostic.
 
 ## Conventions
@@ -127,7 +129,7 @@ auto-set to a per-task percentile during training), `advantage_dropout` (CFG).
 - `lerobot_robot_piper/` — Piper arm (6-DOF + gripper, CAN bus) + 2× Intel
   RealSense D435 (wrist + scene, 640×480 @ 30fps). Platform-specific RealSense
   variants for macOS vs Linux.
-- `lerobot_teleoperator_piper/` — Piper teleop interface for `mise run record`.
+- `lerobot_teleoperator_piper/` — Piper teleop interface for `pixi run record`.
 
 Both packages are commented out from the `dev` group in `pyproject.toml`; sync
 locally only when working on hardware.
@@ -136,9 +138,9 @@ locally only when working on hardware.
 
 YAML configs drive workflows via draccus / LeRobot config parsers:
 
-- `train.yaml` — base Pi0.5 training (`mise run train`).
+- `train.yaml` — base Pi0.5 training (`pixi run train`).
 - `eval.yaml` — LIBERO eval; **policy args must come from CLI**, e.g.
-  `mise run eval` overrides `--policy.path` and `--policy.n_action_steps`.
+  `pixi run eval` overrides `--policy.path` and `--policy.n_action_steps`.
 - `sky.yaml` / `sky-ssh.yaml` — SkyPilot launch configs (Vast / generic SSH),
   including LIBERO-plus assets bootstrap.
 - `slurm.yaml` — HTC SLURM submission with Singularity bind mounts.
@@ -147,9 +149,9 @@ YAML configs drive workflows via draccus / LeRobot config parsers:
 ### Deployment
 
 - **Singularity** (`container.def` → `container.sif`) for the HTC cluster
-  (L40S/H100). Built and uploaded via `mise run container`.
+  (L40S/H100). Built and uploaded via `pixi run container`.
 - **SkyPilot** (`configs/sky*.yaml`) targets Vast / RunPod / etc. The setup
-  block bootstraps `mise`, `uv sync`, and downloads LIBERO assets from the
+  block bootstraps `uv`, runs `uv sync`, and downloads LIBERO assets from the
   `Sylvest/LIBERO-plus` HF dataset.
 
 ### LeRobot fork

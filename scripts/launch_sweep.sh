@@ -2,7 +2,7 @@
 # Create (or reuse) a W&B sweep and submit N SLURM agents to the HTC cluster.
 #
 # Each agent runs `wandb agent --count 1` inside the same singularity container
-# used by `mise run train`, so it executes exactly one sweep trial and exits.
+# used by `pixi run train`, so it executes exactly one sweep trial and exits.
 # Submit one agent = one HTC job = one sweep trial.
 #
 # Usage:

@@ -73,14 +73,14 @@ uv sync
 
 ## Usage
 
-Workflows are driven by [mise](https://mise.jdx.dev/) tasks and YAML configs.
-Cluster job submission is managed with
+Workflows are driven by [pixi](https://pixi.sh/) tasks and YAML configs. Cluster
+job submission is managed with
 [slurm-tools](https://github.com/reeceomahoney/slurm-tools).
 
 ```bash
 # Training & evaluation
-mise run train              # Train base policy
-mise run eval               # Evaluate in LIBERO simulation
+pixi run train              # Train base policy
+pixi run eval               # Evaluate in LIBERO simulation
 
 # RL pipeline
 uv run python -m distal.collect
@@ -89,12 +89,12 @@ uv run python -m distal.train_value
 uv run python -m distal.train_pi_star
 
 # Hardware
-mise run record             # Record demonstrations via teleop
-mise run play               # Play trained policy on physical arm
+pixi run record             # Record demonstrations via teleop
+pixi run rollout            # Play trained policy on physical arm
 
 # Cluster / cloud
-mise run sky [cluster_id]   # Launch (or sky exec on) SkyPilot cluster
-mise run container          # Build Singularity container and upload to HPC
+pixi run sky [cluster_id]   # Launch (or sky exec on) SkyPilot cluster
+pixi run container          # Build Singularity container and upload to HPC
 uv run slurm run            # Submit SLURM job
 ```
 
