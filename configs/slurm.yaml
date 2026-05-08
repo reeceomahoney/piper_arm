@@ -25,4 +25,4 @@ command: |-
   pixi install
 
   # run command
-  uv run distal/compute_maha_stats.py
+  uv run distal/train_value.py
