@@ -67,8 +67,8 @@ class MahaRewardConfig(RewardConfig):
 
     base_policy: str = "lerobot/pi05-libero"
     stats_path: str = "reece-omahoney/pi05-maha-stats"
-    embed_batch_size: int = 32
-    embed_num_workers: int = 4
+    embed_batch_size: int = 128
+    embed_num_workers: int = 8
 
     def compute_step_rewards(
         self,
@@ -100,11 +100,11 @@ class KnnRewardConfig(RewardConfig):
     distal/auroc.py so kNN-AUROC and kNN-reward use the same demo set."""
 
     base_policy: str = "lerobot/pi05-libero"
-    embed_batch_size: int = 32
-    embed_num_workers: int = 4
+    embed_batch_size: int = 128
+    embed_num_workers: int = 8
     k: int = 10
     metric: str = "l2"  # "l2" or "cosine"
-    chunk_size: int = 256
+    chunk_size: int = 4096
     demo_dataset_repo_id: str = "lerobot/libero_10"
     demo_max_frames: int | None = 50_000
     demo_subsample_seed: int = 0
