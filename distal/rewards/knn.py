@@ -14,6 +14,7 @@ by everything that affects them) via ``rewards.maha.load_or_compute_rewards``.
 import hashlib
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,6 @@ from lerobot.policies.pi05.modeling_pi05 import PI05Policy
 from lerobot.processor import rename_stats
 from safetensors.numpy import load_file, save_file
 from torch.utils.data import DataLoader, Subset
-from tqdm import tqdm
 
 from distal.rewards.maha import (
     load_or_compute_rewards,
@@ -61,7 +61,10 @@ def embed_dataset(
         drop_last=False,
     )
     embs: list[torch.Tensor] = []
-    for batch in tqdm(loader, desc=desc):
+    total = len(loader)
+    logging.info(f"{desc}: {total} batches")
+    start = time.monotonic()
+    for i, batch in enumerate(loader):
         batch = {
             k: v.to(device) if isinstance(v, torch.Tensor) else v
             for k, v in batch.items()
@@ -70,6 +73,13 @@ def embed_dataset(
         with torch.no_grad():
             emb = embed_siglip_pooled(policy, batch)
         embs.append(emb.cpu().float())
+        done = i + 1
+        if done % 10 == 0 or done == total:
+            elapsed = time.monotonic() - start
+            eta = elapsed * (total - done) / done
+            logging.info(
+                f"{desc}: {done}/{total} [elapsed {elapsed:.0f}s, eta {eta:.0f}s]"
+            )
     return torch.cat(embs, dim=0).numpy()
 
 
