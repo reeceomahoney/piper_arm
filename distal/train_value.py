@@ -19,12 +19,10 @@ Reads per-episode success labels from the dataset's ``success`` column
 (populated by ``distal/collect.py``).
 """
 
-import json
 import logging
 import math
 import random
 import time
-from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -37,7 +35,11 @@ import torch.nn.functional as F  # noqa: N812
 from lerobot.configs import parser
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.video_utils import _default_decoder_cache
+from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.import_utils import register_third_party_plugins
+from lerobot.utils.io_utils import write_json
+from lerobot.utils.random_utils import set_seed
+from lerobot.utils.utils import cycle, init_logging
 from torch.utils.data import DataLoader, Dataset
 
 from distal.rewards.configs import KnnRewardConfig, RewardConfig
@@ -90,7 +92,7 @@ class RECAPValueTrainingConfig:
     learning_rate: float = 2.5e-5
     val_split_ratio: float = 0.1
     seed: int = 42
-    device: str = "auto"
+    device: str = "cuda"
     log_every_n_steps: int = 100
     plot_every_n_train_steps: int = 200
     save_every_n_steps: int = 1000
@@ -128,31 +130,7 @@ class RECAPValueTrainingConfig:
         return f"{self.hub_user}/{self.job_name}"
 
 
-def _set_seed(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-
-def _to_int(value) -> int:
-    if isinstance(value, torch.Tensor):
-        return int(value.item())
-    if isinstance(value, np.generic):
-        return int(value.item())
-    return int(value)
-
-
-def _to_float(value) -> float:
-    if isinstance(value, torch.Tensor):
-        return float(value.item())
-    if isinstance(value, np.generic):
-        return float(value.item())
-    return float(value)
-
-
-def _format_duration(seconds: float) -> str:
+def format_duration(seconds: float) -> str:
     total_seconds = max(0, int(seconds))
     mins, secs = divmod(total_seconds, 60)
     hours, mins = divmod(mins, 60)
@@ -163,7 +141,7 @@ def _format_duration(seconds: float) -> str:
     return f"{secs:d}s"
 
 
-def _is_known_video_validation_error(error: Exception) -> bool:
+def is_known_video_validation_error(error: Exception) -> bool:
     message = str(error)
     return (
         "Could not push packet to decoder" in message
@@ -176,37 +154,35 @@ def _is_known_video_validation_error(error: Exception) -> bool:
     )
 
 
-def _load_episode_success_from_dataset(
-    dataset: LeRobotDataset,
-) -> dict[int, int]:
+def load_episode_success_from_dataset(dataset: LeRobotDataset) -> dict[int, int]:
     """Read the per-episode ``success`` label written by ``collect.py``."""
     success_map: dict[int, int] = {}
     for ep_idx, success in zip(
         dataset.hf_dataset["episode_index"], dataset.hf_dataset["success"]
     ):
-        ep_idx = _to_int(ep_idx)
+        ep_idx = int(ep_idx)
         if ep_idx not in success_map:
             success_map[ep_idx] = int(bool(success))
     return success_map
 
 
-def _selected_episode_indices(dataset: LeRobotDataset) -> list[int]:
+def selected_episode_indices(dataset: LeRobotDataset) -> list[int]:
     if dataset.episodes is None:
         return list(range(dataset.meta.total_episodes))
-    return [_to_int(ep_idx) for ep_idx in dataset.episodes]
+    return [int(ep_idx) for ep_idx in dataset.episodes]
 
 
-def _build_episode_infos(dataset: LeRobotDataset) -> dict[int, EpisodeInfo]:
+def build_episode_infos(dataset: LeRobotDataset) -> dict[int, EpisodeInfo]:
     episode_infos: dict[int, EpisodeInfo] = {}
-    for ep_idx in _selected_episode_indices(dataset):
+    for ep_idx in selected_episode_indices(dataset):
         ep_data = dataset.meta.episodes[ep_idx]
-        start_index = _to_int(ep_data["dataset_from_index"])
-        end_index = _to_int(ep_data["dataset_to_index"])
+        start_index = int(ep_data["dataset_from_index"])
+        end_index = int(ep_data["dataset_to_index"])
         length = max(1, end_index - start_index)
 
         task: str | None = None
         if "task_index" in ep_data and dataset.meta.tasks is not None:
-            task_index = _to_int(ep_data["task_index"])
+            task_index = int(ep_data["task_index"])
             task = str(dataset.meta.tasks.iloc[task_index].name)
         elif "tasks" in ep_data:
             tasks = ep_data["tasks"]
@@ -233,16 +209,7 @@ def _build_episode_infos(dataset: LeRobotDataset) -> dict[int, EpisodeInfo]:
     return episode_infos
 
 
-def _compute_task_max_episode_len(
-    episode_infos: dict[int, EpisodeInfo],
-) -> dict[str, int]:
-    by_task: dict[str, int] = {}
-    for info in episode_infos.values():
-        by_task[info.task] = max(by_task.get(info.task, 1), info.length)
-    return by_task
-
-
-def _discretize_values(
+def discretize_values(
     normalized_returns: torch.Tensor, num_value_bins: int
 ) -> torch.Tensor:
     bin_edges = torch.linspace(
@@ -256,21 +223,25 @@ def _discretize_values(
     return bin_ids.clamp(min=0, max=num_value_bins - 1).to(torch.long)
 
 
-def _build_frame_targets(
+def build_frame_targets(
     dataset: LeRobotDataset,
     success_by_episode: dict[int, int],
     c_fail: float,
     num_value_bins: int,
     step_rewards: dict[int, float] | None = None,
 ) -> list[FrameTarget]:
-    episode_infos = _build_episode_infos(dataset)
-    task_max_episode_len = _compute_task_max_episode_len(episode_infos)
+    episode_infos = build_episode_infos(dataset)
 
-    abs_to_rel_idx: dict[int, int] = {}
-    for rel_idx in range(len(dataset.hf_dataset)):
-        row = dataset.hf_dataset[rel_idx]
-        abs_index = _to_int(row["index"])
-        abs_to_rel_idx[abs_index] = rel_idx
+    task_max_episode_len: dict[str, int] = {}
+    for info in episode_infos.values():
+        task_max_episode_len[info.task] = max(
+            task_max_episode_len.get(info.task, 1), info.length
+        )
+
+    abs_to_rel_idx = {
+        int(abs_idx): rel_idx
+        for rel_idx, abs_idx in enumerate(dataset.hf_dataset["index"])
+    }
 
     missing_episode_labels = sorted(set(episode_infos) - set(success_by_episode))
     if missing_episode_labels:
@@ -299,7 +270,7 @@ def _build_frame_targets(
         )
         max_len_for_task = float(task_max_episode_len[info.task])
         normalized_returns = torch.clamp(returns / max_len_for_task, min=-1.0, max=0.0)
-        target_bins = _discretize_values(
+        target_bins = discretize_values(
             normalized_returns, num_value_bins=num_value_bins
         )
 
@@ -313,8 +284,8 @@ def _build_frame_targets(
                     episode_index=ep_idx,
                     success=int(success),
                     task=info.task,
-                    target_value=_to_float(normalized_returns[offset]),
-                    target_bin=_to_int(target_bins[offset]),
+                    target_value=float(normalized_returns[offset]),
+                    target_bin=int(target_bins[offset]),
                 )
             )
 
@@ -326,7 +297,7 @@ def _build_frame_targets(
     return frame_targets
 
 
-def _split_train_val_targets(
+def split_train_val_targets(
     frame_targets: list[FrameTarget],
     val_ratio: float,
     seed: int,
@@ -334,159 +305,38 @@ def _split_train_val_targets(
     if not 0.0 <= val_ratio < 1.0:
         raise ValueError(f"val_split_ratio must be in [0, 1). Got {val_ratio}.")
 
-    episode_ids = sorted({target.episode_index for target in frame_targets})
-    if len(episode_ids) < 2:
+    episode_success: dict[int, int] = {
+        target.episode_index: target.success for target in frame_targets
+    }
+    if len(episode_success) < 2:
         raise ValueError(
             "At least 2 labeled episodes are required for a train/val split."
         )
 
-    episode_success: dict[int, int] = {}
-    for target in frame_targets:
-        existing = episode_success.get(target.episode_index)
-        if existing is not None and existing != target.success:
-            raise ValueError(
-                f"Episode {target.episode_index} has inconsistent success "
-                f"labels in frame targets: {existing} vs {target.success}."
-            )
-        episode_success[target.episode_index] = target.success
-
-    success_episode_ids = [
-        ep_id for ep_id in episode_ids if episode_success[ep_id] == 1
-    ]
-    failure_episode_ids = [
-        ep_id for ep_id in episode_ids if episode_success[ep_id] == 0
-    ]
+    success_ids = sorted(ep for ep, s in episode_success.items() if s == 1)
+    failure_ids = sorted(ep for ep, s in episode_success.items() if s == 0)
 
     rng = random.Random(seed)
-    rng.shuffle(success_episode_ids)
-    rng.shuffle(failure_episode_ids)
+    rng.shuffle(success_ids)
+    rng.shuffle(failure_ids)
 
-    val_count = max(1, int(round(len(episode_ids) * val_ratio)))
-    val_count = min(val_count, len(episode_ids) - 1)
+    val_episode_ids: set[int] = set()
+    for ids in (success_ids, failure_ids):
+        if not ids:
+            continue
+        n_val = max(1, round(len(ids) * val_ratio))
+        n_val = min(n_val, len(ids) - 1)  # leave at least 1 for train
+        val_episode_ids.update(ids[:n_val])
 
-    class_to_ids = {
-        1: success_episode_ids,
-        0: failure_episode_ids,
-    }
-    val_per_class = {1: 0, 0: 0}
-
-    # If possible, keep both classes represented in validation.
-    eligible_classes = [label for label, ids in class_to_ids.items() if len(ids) > 1]
-    if val_count >= len(eligible_classes):
-        for label in eligible_classes:
-            val_per_class[label] = 1
-    remaining_val_slots = val_count - sum(val_per_class.values())
-
-    if remaining_val_slots > 0:
-        total_episodes = len(episode_ids)
-        fractional_parts: list[tuple[float, int]] = []
-        for label, ids in class_to_ids.items():
-            class_size = len(ids)
-            max_for_class = max(0, class_size - 1)
-            available = max_for_class - val_per_class[label]
-            if available <= 0:
-                continue
-            raw_target = val_count * (class_size / total_episodes)
-            additional = int(raw_target)
-            to_add = min(available, additional)
-            val_per_class[label] += to_add
-            remaining_val_slots -= to_add
-            fractional_parts.append((raw_target - additional, label))
-
-        if remaining_val_slots > 0:
-            fractional_parts.sort(reverse=True)
-            for _, label in fractional_parts:
-                if remaining_val_slots <= 0:
-                    break
-                max_for_class = max(0, len(class_to_ids[label]) - 1)
-                if val_per_class[label] >= max_for_class:
-                    continue
-                val_per_class[label] += 1
-                remaining_val_slots -= 1
-
-        if remaining_val_slots > 0:
-            for label, ids in class_to_ids.items():
-                if remaining_val_slots <= 0:
-                    break
-                max_for_class = max(0, len(ids) - 1)
-                while remaining_val_slots > 0 and val_per_class[label] < max_for_class:
-                    val_per_class[label] += 1
-                    remaining_val_slots -= 1
-
-    val_episode_ids = set()
-    val_episode_ids.update(success_episode_ids[: val_per_class[1]])
-    val_episode_ids.update(failure_episode_ids[: val_per_class[0]])
-    if not val_episode_ids:
-        shuffled_episode_ids = episode_ids.copy()
-        rng.shuffle(shuffled_episode_ids)
-        val_episode_ids = {shuffled_episode_ids[0]}
-
-    train_episode_ids = set(episode_ids) - val_episode_ids
-    if not train_episode_ids:
-        moved_episode = next(iter(val_episode_ids))
-        val_episode_ids.remove(moved_episode)
-        train_episode_ids.add(moved_episode)
-
-    train_targets = [
-        target for target in frame_targets if target.episode_index in train_episode_ids
-    ]
-    val_targets = [
-        target for target in frame_targets if target.episode_index in val_episode_ids
-    ]
-
-    if not train_targets or not val_targets:
+    train_episode_ids = set(episode_success) - val_episode_ids
+    if not val_episode_ids or not train_episode_ids:
         raise ValueError(
             "Train/val split produced an empty partition. Adjust val_split_ratio."
         )
 
+    train_targets = [t for t in frame_targets if t.episode_index in train_episode_ids]
+    val_targets = [t for t in frame_targets if t.episode_index in val_episode_ids]
     return train_targets, val_targets
-
-
-def _to_chw_float_tensor(image) -> torch.Tensor:
-    if isinstance(image, torch.Tensor):
-        img = image.detach().clone().float()
-    else:
-        img = torch.as_tensor(np.asarray(image), dtype=torch.float32)
-
-    if img.ndim == 2:
-        img = img.unsqueeze(0).repeat(3, 1, 1)
-    elif img.ndim == 3:
-        if img.shape[0] not in (1, 3):
-            img = img.permute(2, 0, 1)
-        if img.shape[0] == 1:
-            img = img.repeat(3, 1, 1)
-        if img.shape[0] > 3:
-            img = img[:3]
-    else:
-        raise ValueError(f"Unsupported image shape: {tuple(img.shape)}")
-
-    if img.max() > 1.0:
-        img = img / 255.0
-    return img.clamp(0.0, 1.0)
-
-
-def _collect_images(
-    frame: dict, camera_keys: list[str], image_size: int
-) -> torch.Tensor:
-    image_tensors: list[torch.Tensor] = []
-    for key in camera_keys:
-        if key in frame:
-            image_tensors.append(_to_chw_float_tensor(frame[key]))
-
-    if not image_tensors:
-        image_tensors = [torch.zeros(3, image_size, image_size, dtype=torch.float32)]
-
-    resized = []
-    for image in image_tensors:
-        image = F.interpolate(
-            image.unsqueeze(0),
-            size=(image_size, image_size),
-            mode="bilinear",
-            align_corners=False,
-        ).squeeze(0)
-        resized.append(image)
-
-    return torch.stack(resized, dim=0)
 
 
 class RECAPFrameSupervisionDataset(Dataset):
@@ -497,6 +347,9 @@ class RECAPFrameSupervisionDataset(Dataset):
     discretisation, tokenisation) is handled externally by the pi05
     preprocessor pipeline.
     """
+
+    MAX_DECODE_RETRIES = 5
+    RETRY_BASE_DELAY_S = 0.1
 
     def __init__(
         self,
@@ -509,44 +362,41 @@ class RECAPFrameSupervisionDataset(Dataset):
     def __len__(self) -> int:
         return len(self.frame_targets)
 
-    _MAX_DECODE_RETRIES = 5
-    _RETRY_BASE_DELAY_S = 0.1
-
-    def _decode_frame(self, frame_index: int) -> dict | None:
+    def decode_frame(self, frame_index: int) -> dict | None:
         """Try to decode a single frame, returning None on persistent failure."""
-        for attempt in range(self._MAX_DECODE_RETRIES):
+        for attempt in range(self.MAX_DECODE_RETRIES):
             try:
                 return self.base_dataset[frame_index]
             except IndexError as exc:
-                if not _is_known_video_validation_error(exc):
+                if not is_known_video_validation_error(exc):
                     raise
                 return None
             except RuntimeError as exc:
-                if not _is_known_video_validation_error(exc):
+                if not is_known_video_validation_error(exc):
                     raise
-                time.sleep(self._RETRY_BASE_DELAY_S * (2**attempt))
+                time.sleep(self.RETRY_BASE_DELAY_S * (2**attempt))
         return None
 
     def __getitem__(self, index: int) -> dict:
         target = self.frame_targets[index]
 
-        frame = self._decode_frame(target.frame_index)
+        frame = self.decode_frame(target.frame_index)
         if frame is None:
             logging.warning(
                 f"Permanently failed to decode frame {target.frame_index} "
                 f"(episode {target.episode_index}); substituting a random frame."
             )
-            for _ in range(self._MAX_DECODE_RETRIES):
+            for _ in range(self.MAX_DECODE_RETRIES):
                 alt_index = random.randint(0, len(self.frame_targets) - 1)
                 alt_target = self.frame_targets[alt_index]
-                frame = self._decode_frame(alt_target.frame_index)
+                frame = self.decode_frame(alt_target.frame_index)
                 if frame is not None:
                     target = alt_target
                     break
             else:
                 raise RuntimeError(
                     f"Failed to decode frame {target.frame_index} and "
-                    f"{self._MAX_DECODE_RETRIES} random substitutes"
+                    f"{self.MAX_DECODE_RETRIES} random substitutes"
                 )
 
         frame["target_bin"] = target.target_bin
@@ -556,50 +406,31 @@ class RECAPFrameSupervisionDataset(Dataset):
         return frame
 
 
-_TRAINING_METADATA_KEYS = ("target_bin", "target_value", "success", "frame_index")
+TRAINING_METADATA_KEYS = ("target_bin", "target_value", "success", "frame_index")
 
 VAL_PLOT_NUM_EPISODES = 4
 VAL_PLOT_NUM_FRAMES = 8
 
 
-def _preprocess_batch(batch: dict, preprocessor) -> dict:
+def preprocess_batch(batch: dict, preprocessor) -> dict:
     """Apply the preprocessor while preserving training metadata keys."""
-    preserved = {}
-    for k in _TRAINING_METADATA_KEYS:
-        if k in batch:
-            v = batch[k]
-            preserved[k] = v
+    preserved = {k: batch.pop(k) for k in TRAINING_METADATA_KEYS if k in batch}
     batch = preprocessor(batch)
+    device = next(v.device for v in batch.values() if isinstance(v, torch.Tensor))
     for k, v in preserved.items():
-        if (
-            isinstance(v, torch.Tensor)
-            and v.device != batch.get("observation.state", v).device
-        ):
-            device = next(
-                (bv.device for bv in batch.values() if isinstance(bv, torch.Tensor)),
-                v.device,
-            )
-            v = v.to(device)
-        batch[k] = v
+        batch[k] = v.to(device) if isinstance(v, torch.Tensor) else v
     return batch
 
 
-def _select_validation_plot_episode_ids(
+def select_validation_plot_episode_ids(
     frame_targets: list[FrameTarget], max_episodes: int
 ) -> list[int]:
     if max_episodes <= 0:
         return []
 
-    episode_success: dict[int, int] = {}
-    for target in frame_targets:
-        episode_success[target.episode_index] = target.success
-
-    success_ids = sorted(
-        ep_id for ep_id, success in episode_success.items() if success == 1
-    )
-    failure_ids = sorted(
-        ep_id for ep_id, success in episode_success.items() if success == 0
-    )
+    episode_success = {t.episode_index: t.success for t in frame_targets}
+    success_ids = sorted(ep for ep, s in episode_success.items() if s == 1)
+    failure_ids = sorted(ep for ep, s in episode_success.items() if s == 0)
 
     selected: list[int] = []
     if success_ids:
@@ -607,8 +438,7 @@ def _select_validation_plot_episode_ids(
     if failure_ids and len(selected) < max_episodes:
         selected.append(failure_ids[0])
 
-    all_ids = sorted(episode_success.keys())
-    for ep_id in all_ids:
+    for ep_id in sorted(episode_success):
         if len(selected) >= max_episodes:
             break
         if ep_id not in selected:
@@ -616,7 +446,7 @@ def _select_validation_plot_episode_ids(
     return selected
 
 
-def _sample_preview_frame_indices(
+def sample_preview_frame_indices(
     frame_indices: list[int], num_frames: int
 ) -> list[int]:
     if not frame_indices or num_frames <= 0:
@@ -628,17 +458,26 @@ def _sample_preview_frame_indices(
     return [frame_indices[pos] for pos in sample_positions.tolist()]
 
 
-def _prepare_plot_frame(
+def prepare_plot_frame(
     frame: dict, camera_keys: list[str], image_size: int
 ) -> np.ndarray:
-    image_stack = _collect_images(
-        frame=frame, camera_keys=camera_keys, image_size=image_size
-    )
-    image = image_stack[0].permute(1, 2, 0).cpu().numpy()
-    return np.clip(image, 0.0, 1.0)
+    image: torch.Tensor | None = None
+    for key in camera_keys:
+        if key in frame:
+            image = frame[key].float()
+            break
+    if image is None:
+        image = torch.zeros(3, image_size, image_size)
+    image = F.interpolate(
+        image.unsqueeze(0),
+        size=(image_size, image_size),
+        mode="bilinear",
+        align_corners=False,
+    ).squeeze(0)
+    return np.clip(image.permute(1, 2, 0).cpu().numpy(), 0.0, 1.0)
 
 
-def _save_validation_episode_plot(
+def save_validation_episode_plot(
     dataset: LeRobotDataset,
     episode_index: int,
     predictions: list[ValidationFramePrediction],
@@ -671,7 +510,7 @@ def _save_validation_episode_plot(
         [pred.reconstructed_value for pred in predictions], dtype=np.float32
     )
 
-    preview_indices = _sample_preview_frame_indices(
+    preview_indices = sample_preview_frame_indices(
         frame_indices=frame_indices, num_frames=num_preview_frames
     )
     preview_images: list[np.ndarray] = []
@@ -681,7 +520,7 @@ def _save_validation_episode_plot(
     for frame_idx in preview_indices:
         frame = dataset[frame_idx]
         preview_images.append(
-            _prepare_plot_frame(
+            prepare_plot_frame(
                 frame=frame, camera_keys=camera_keys, image_size=image_size
             )
         )
@@ -734,28 +573,6 @@ def _save_validation_episode_plot(
     return True
 
 
-def _init_wandb(cfg: RECAPValueTrainingConfig) -> Any:
-    """Initialise a W&B run if ``wandb_project`` is set, otherwise return ``None``."""
-    if cfg.wandb_project is None:
-        return None
-    import wandb
-
-    run = wandb.init(
-        project=cfg.wandb_project,
-        entity=cfg.wandb_entity,
-        name=cfg.job_name,
-        config=draccus.encode(cfg),
-    )
-    logging.info(f"W&B run: {run.url}")
-    return run
-
-
-def cycle(loader: DataLoader) -> Iterator[dict]:
-    while True:
-        for batch in loader:
-            yield batch
-
-
 def train_step(
     model: RECAPValueNetwork,
     batch: dict,
@@ -764,7 +581,7 @@ def train_step(
     scheduler: torch.optim.lr_scheduler.LambdaLR | None,
     max_grad_norm: float,
 ) -> dict[str, float]:
-    batch = _preprocess_batch(batch, preprocessor)
+    batch = preprocess_batch(batch, preprocessor)
     # Strip non-tensor entries (e.g. raw "task" strings) so torch.compile's
     # dynamo doesn't specialize on their values and recompile per task.
     model_batch = {k: v for k, v in batch.items() if isinstance(v, torch.Tensor)}
@@ -813,7 +630,7 @@ def validate(
             if max_steps is not None and step >= max_steps:
                 break
 
-            batch = _preprocess_batch(batch, preprocessor)
+            batch = preprocess_batch(batch, preprocessor)
             model_batch = {
                 k: v for k, v in batch.items() if isinstance(v, torch.Tensor)
             }
@@ -849,19 +666,19 @@ def validate(
                 reconstructed = (probs * support.unsqueeze(0)).sum(dim=-1)
 
                 for idx in range(batch_size):
-                    episode_index = _to_int(batch["episode_index"][idx])
+                    episode_index = int(batch["episode_index"][idx])
                     if (
                         collect_episode_ids is not None
                         and episode_index not in collect_episode_ids
                     ):
                         continue
                     prediction = ValidationFramePrediction(
-                        frame_index=_to_int(batch["frame_index"][idx]),
-                        success=_to_int(batch["success"][idx]),
-                        target_value=_to_float(batch["target_value"][idx]),
-                        target_bin=_to_int(batch["target_bin"][idx]),
-                        predicted_bin=_to_int(pred_bins[idx]),
-                        reconstructed_value=_to_float(reconstructed[idx]),
+                        frame_index=int(batch["frame_index"][idx]),
+                        success=int(batch["success"][idx]),
+                        target_value=float(batch["target_value"][idx]),
+                        target_bin=int(batch["target_bin"][idx]),
+                        predicted_bin=int(pred_bins[idx]),
+                        reconstructed_value=float(reconstructed[idx]),
                         predicted_probs=probs[idx].float().cpu().numpy().copy(),
                     )
                     collected_predictions.setdefault(episode_index, []).append(
@@ -881,25 +698,6 @@ def validate(
     }
 
 
-def _save_json(path: Path, data: dict | list) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-
-
-def _resolve_device(device_str: str) -> torch.device:
-    if device_str == "auto":
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        return torch.device("cpu")
-
-    requested = torch.device(device_str)
-    if requested.type == "cuda" and not torch.cuda.is_available():
-        logging.warning("CUDA requested but unavailable. Falling back to CPU.")
-        return torch.device("cpu")
-    return requested
-
-
 def save_checkpoint(
     dest: Path,
     model: RECAPValueNetwork,
@@ -910,39 +708,44 @@ def save_checkpoint(
     dest.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(dest)
     preprocessor.save_pretrained(dest, config_filename="policy_preprocessor.json")
-    _save_json(dest / "metrics.json", metrics)
-    _save_json(dest / "train_config.json", draccus.encode(cfg))
+    write_json(metrics, dest / "metrics.json")
+    write_json(draccus.encode(cfg), dest / "train_config.json")
 
 
 @parser.wrap()
 def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
     """Train/validate RECAPValueNetwork with distributional bin supervision."""
     register_third_party_plugins()
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        force=True,
-    )
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    _set_seed(cfg.seed)
+    init_logging()
+    set_seed(cfg.seed)
 
     output_dir = Path("outputs/value") / datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
     checkpoints_dir = output_dir / "checkpoints"
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
-    _save_json(output_dir / "train_config.json", draccus.encode(cfg))
+    write_json(draccus.encode(cfg), output_dir / "train_config.json")
 
-    device = _resolve_device(cfg.device)
+    device = get_safe_torch_device(cfg.device, log=True)
     logging.info(f"Using device: {device}")
 
-    wandb_run = _init_wandb(cfg)
+    wandb_run = None
+    if cfg.wandb_project is not None:
+        import wandb
+
+        wandb_run = wandb.init(
+            project=cfg.wandb_project,
+            entity=cfg.wandb_entity,
+            name=cfg.job_name,
+            config=draccus.encode(cfg),
+        )
+        logging.info(f"W&B run: {wandb_run.url}")
 
     dataset = LeRobotDataset(
         repo_id=cfg.repo_id,
         vcodec="auto",
     )
 
-    success_by_episode = _load_episode_success_from_dataset(dataset)
+    success_by_episode = load_episode_success_from_dataset(dataset)
     logging.info(
         f"Loaded success labels for {len(success_by_episode)} episodes "
         "from the dataset's 'success' column."
@@ -950,14 +753,14 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
 
     step_rewards = cfg.reward.compute_step_rewards(dataset=dataset, device=device)
 
-    frame_targets = _build_frame_targets(
+    frame_targets = build_frame_targets(
         dataset=dataset,
         success_by_episode=success_by_episode,
         c_fail=cfg.c_fail,
         num_value_bins=cfg.model.num_value_bins,
         step_rewards=step_rewards,
     )
-    train_targets, val_targets = _split_train_val_targets(
+    train_targets, val_targets = split_train_val_targets(
         frame_targets=frame_targets,
         val_ratio=cfg.val_split_ratio,
         seed=cfg.seed,
@@ -997,12 +800,6 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         drop_last=False,
     )
 
-    if cfg.model.precision not in ("float32", "bfloat16"):
-        raise ValueError(
-            "model.precision must be one of ['float32', 'bfloat16'], got "
-            f"{cfg.model.precision}"
-        )
-
     cfg.model.device = str(device)
     cfg.model.repo_id = cfg.value_repo_id
     cfg.model.push_to_hub = cfg.push_to_hub
@@ -1033,7 +830,7 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         f"train_steps={cfg.train_steps}"
     )
 
-    plot_episode_ids = _select_validation_plot_episode_ids(
+    plot_episode_ids = select_validation_plot_episode_ids(
         frame_targets=val_targets,
         max_episodes=VAL_PLOT_NUM_EPISODES,
     )
@@ -1065,21 +862,6 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
         f"{len(set(t.episode_index for t in val_targets))} val episodes."
     )
 
-    if cfg.log_every_n_steps <= 0:
-        raise ValueError(f"log_every_n_steps must be > 0, got {cfg.log_every_n_steps}")
-    if cfg.plot_every_n_train_steps < 0:
-        raise ValueError(
-            f"plot_every_n_train_steps must be >= 0, got {cfg.plot_every_n_train_steps}"
-        )
-    if cfg.save_every_n_steps <= 0:
-        raise ValueError(
-            f"save_every_n_steps must be > 0, got {cfg.save_every_n_steps}"
-        )
-    if cfg.max_val_steps is not None and cfg.max_val_steps <= 0:
-        raise ValueError(
-            f"max_val_steps must be > 0 when provided, got {cfg.max_val_steps}"
-        )
-
     # Need this to prevent hanging
     _default_decoder_cache.clear()
 
@@ -1091,11 +873,6 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
     patience_counter = 0
     history: list[dict] = []
     should_stop = False
-    nan_metrics = {
-        "loss": float("nan"),
-        "bin_acc": float("nan"),
-        "value_mae": float("nan"),
-    }
 
     start_time = time.perf_counter()
     last_log_step = 0
@@ -1135,8 +912,8 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
             f"mae={train_metrics['value_mae']:.5f} "
             f"lr={lr:.2e} "
             f"it/s={steps_per_sec:.2f} "
-            f"elapsed={_format_duration(elapsed)} "
-            f"eta={_format_duration(eta)}"
+            f"elapsed={format_duration(elapsed)} "
+            f"eta={format_duration(eta)}"
         )
         if wandb_run is not None:
             wandb_run.log(
@@ -1162,14 +939,18 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
                 value_bin_support=model.value_bin_support,
             )
         except Exception as error:  # noqa: BLE001
-            if not _is_known_video_validation_error(error):
+            if not is_known_video_validation_error(error):
                 model.train()
                 raise
             logging.warning(
                 f"[step {global_step}] Validation skipped due to persistent "
                 f"video decoding/timestamp errors: {error}"
             )
-            val_metrics = dict(nan_metrics)
+            val_metrics = {
+                "loss": float("nan"),
+                "bin_acc": float("nan"),
+                "value_mae": float("nan"),
+            }
         else:
             logging.info(
                 f"[step {global_step}/{cfg.train_steps}] "
@@ -1208,7 +989,7 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
                     collected_predictions=collected_predictions,
                 )
             except Exception as error:  # noqa: BLE001
-                if not _is_known_video_validation_error(error):
+                if not is_known_video_validation_error(error):
                     model.train()
                     raise
                 logging.warning(
@@ -1220,7 +1001,7 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
                 saved_paths: list[Path] = []
                 for episode_index in plot_episode_ids:
                     plot_path = plot_dir / f"episode_{episode_index:05d}.png"
-                    did_save = _save_validation_episode_plot(
+                    did_save = save_validation_episode_plot(
                         dataset=dataset,
                         episode_index=episode_index,
                         predictions=collected_predictions.get(episode_index, []),
@@ -1237,11 +1018,9 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
                         f"plot(s) under {plot_dir}"
                     )
                     if wandb_run is not None:
-                        import wandb as _wandb
-
                         plot_images = {
                             f"val_plots/episode_{p.stem.split('_')[-1]}": (
-                                _wandb.Image(str(p))
+                                wandb.Image(str(p))
                             )
                             for p in saved_paths
                         }
@@ -1261,7 +1040,7 @@ def run_recap_value_train_val(cfg: RECAPValueTrainingConfig) -> None:
             "lr": lr,
         }
         history.append(saved_metrics)
-        _save_json(output_dir / "metrics_history.json", history)
+        write_json(history, output_dir / "metrics_history.json")  # ty: ignore[invalid-argument-type]
 
         is_save_step = (
             global_step % cfg.save_every_n_steps == 0 or global_step == cfg.train_steps

@@ -45,15 +45,26 @@ from lerobot.datasets.sampler import EpisodeAwareSampler
 from lerobot.envs.configs import LiberoEnv
 from lerobot.envs.factory import make_env_pre_post_processors
 from lerobot.utils.constants import ACTION, OBS_LANGUAGE_TOKENS
+from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.feature_utils import dataset_to_policy_features
+from lerobot.utils.io_utils import write_json
+from lerobot.utils.random_utils import set_seed
+from lerobot.utils.utils import cycle
 from lerobot_policy_pistar06.configuration_pistar06 import PiStar06Config
 from lerobot_policy_pistar06.modeling_pistar06 import PiStar06Policy
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
 
 from distal import advantage_cache
-from distal import train_value as base
 from distal.sim_eval import resolve_eval_task_ids, run_sim_eval
+from distal.train_value import (
+    FrameTarget,
+    build_frame_targets,
+    format_duration,
+    is_known_video_validation_error,
+    load_episode_success_from_dataset,
+    split_train_val_targets,
+)
 from distal.value_model import RECAPValueConfig, RECAPValueNetwork
 
 
@@ -273,7 +284,7 @@ def _make_vn_preprocessor(policy_cfg, dataset_stats, tokenizer_name: str):
 @torch.no_grad()
 def _precompute_advantages(
     full_dataset: LeRobotDataset,
-    frame_targets: list[base.FrameTarget],
+    frame_targets: list[FrameTarget],
     value_network: RECAPValueNetwork,
     policy_cfg,
     device: torch.device,
@@ -444,7 +455,7 @@ def _run_validation(
         except StopIteration:
             break
         except RuntimeError as exc:
-            if not base._is_known_video_validation_error(exc):
+            if not is_known_video_validation_error(exc):
                 raise
             skipped += 1
             logging.warning(
@@ -619,14 +630,14 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         force=True,
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    base._set_seed(cfg.seed)
+    set_seed(cfg.seed)
 
     output_dir = Path("outputs/pistar") / datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
     checkpoints_dir = output_dir / "checkpoints"
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
-    base._save_json(output_dir / "train_config.json", asdict(cfg))
+    write_json(asdict(cfg), output_dir / "train_config.json")
 
-    device = base._resolve_device(cfg.device)
+    device = get_safe_torch_device(cfg.device, log=True)
     logging.info(f"Using device: {device}")
 
     wandb_run = _init_wandb(cfg)
@@ -637,7 +648,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         vcodec="auto",
     )
 
-    success_by_episode = base._load_episode_success_from_dataset(full_dataset)
+    success_by_episode = load_episode_success_from_dataset(full_dataset)
     logging.info(
         f"Loaded success labels for {len(success_by_episode)} episodes "
         "from the dataset's 'success' column."
@@ -705,14 +716,14 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
             num_workers=int(vn_reward_cfg.get("embed_num_workers", 4)),
         )
 
-    frame_targets = base._build_frame_targets(
+    frame_targets = build_frame_targets(
         dataset=full_dataset,
         success_by_episode=success_by_episode,
         c_fail=c_fail,
         num_value_bins=num_value_bins,
         step_rewards=step_rewards,
     )
-    train_targets, val_targets = base._split_train_val_targets(
+    train_targets, val_targets = split_train_val_targets(
         frame_targets=frame_targets,
         val_ratio=cfg.val_split_ratio,
         seed=cfg.seed,
@@ -992,7 +1003,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
     )
     _log_memory("pre-training-loop")
 
-    train_iter = base.cycle(train_loader)
+    train_iter = cycle(train_loader)
     policy.train()
     optimizer.zero_grad(set_to_none=True)
 
@@ -1007,7 +1018,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
                 batch = next(train_iter)
                 break
             except RuntimeError as exc:
-                if not base._is_known_video_validation_error(exc):
+                if not is_known_video_validation_error(exc):
                     raise
                 skipped_batches += 1
                 logging.warning(
@@ -1105,8 +1116,8 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
             f"loss={step_loss:.5f} "
             f"lr={lr:.2e} "
             f"it/s={steps_per_sec:.2f} "
-            f"elapsed={base._format_duration(elapsed)} "
-            f"eta={base._format_duration(eta)}"
+            f"elapsed={format_duration(elapsed)} "
+            f"eta={format_duration(eta)}"
         )
         wandb_step_metrics.update(
             {
@@ -1129,7 +1140,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
                 max_steps=cfg.max_val_steps,
             )
         except Exception as error:  # noqa: BLE001
-            if not base._is_known_video_validation_error(error):
+            if not is_known_video_validation_error(error):
                 policy.train()
                 raise
             logging.warning(
@@ -1151,7 +1162,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
             **val_metrics,
         }
         history.append(saved_metrics)
-        base._save_json(output_dir / "metrics_history.json", history)
+        write_json(history, output_dir / "metrics_history.json")  # ty: ignore[invalid-argument-type]
 
         checkpoint = {
             "global_train_step": global_step,

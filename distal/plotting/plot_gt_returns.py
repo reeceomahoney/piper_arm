@@ -2,7 +2,7 @@
 train_value config.
 
 Mirrors the reward/return construction in ``distal/train_value.py``
-(``_build_frame_targets``): per-step rewards come from either a fixed -1
+(``build_frame_targets``): per-step rewards come from either a fixed -1
 or the Mahalanobis reward pipeline, a terminal reward of 0 (success) or
 ``-c_fail`` (failure) is appended, and the reverse-cumulative sum is
 normalized by the per-task max episode length and clipped to ``[-1, 0]``.
@@ -18,8 +18,8 @@ from lerobot.utils.import_utils import register_third_party_plugins
 
 from distal.train_value import (
     RECAPValueTrainingConfig,
-    _build_frame_targets,
-    _load_episode_success_from_dataset,
+    build_frame_targets,
+    load_episode_success_from_dataset,
 )
 
 
@@ -126,12 +126,12 @@ def main() -> None:
         episodes=list(range(num_episodes_to_load)),
         vcodec="auto",
     )
-    success_by_episode = _load_episode_success_from_dataset(dataset)
+    success_by_episode = load_episode_success_from_dataset(dataset)
 
     cfg.reward.cache = False
     step_rewards = cfg.reward.compute_step_rewards(dataset=dataset, device=device)
 
-    frame_targets = _build_frame_targets(
+    frame_targets = build_frame_targets(
         dataset=dataset,
         success_by_episode=success_by_episode,
         c_fail=cfg.c_fail,
@@ -140,7 +140,7 @@ def main() -> None:
     )
     steps_frame_targets: list | None = None
     if step_rewards is not None:
-        steps_frame_targets = _build_frame_targets(
+        steps_frame_targets = build_frame_targets(
             dataset=dataset,
             success_by_episode=success_by_episode,
             c_fail=cfg.c_fail,
