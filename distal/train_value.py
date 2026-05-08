@@ -115,8 +115,7 @@ class RECAPValueTrainingConfig:
     # Value network architecture (overrides RECAPValueConfig defaults).
     model: RECAPValueConfig = field(
         default_factory=lambda: RECAPValueConfig(
-            gradient_checkpointing=True,
-            compile_model=True,
+            gradient_checkpointing=True, compile_model=True
         )
     )
 
