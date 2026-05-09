@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12, <3.13"
 dependencies = [
-  "lerobot[libero, pi, training]",
+  "lerobot[libero, libero-plus, pi, training]",
   "transformers==5.5.4",
   "piper-sdk>=0.6.1",
   "matplotlib>=3.7.0",
@@ -46,8 +46,7 @@ lerobot_robot_piper = { path = "lerobot_robot_piper", editable = true }
 lerobot_teleoperator_piper = { path = "lerobot_teleoperator_piper", editable = true }
 lerobot_policy_pistar06 = { path = "lerobot_policy_pistar06", editable = true }
 slurm-tools = { git = "https://github.com/reeceomahoney/slurm-tools.git" }
-# lerobot = { git = "https://github.com/reeceomahoney/lerobot", branch = "distal-libero-plus" }
-lerobot = { git = "https://github.com/reeceomahoney/lerobot", branch = "distal"}
+lerobot = { git = "https://github.com/reeceomahoney/lerobot", branch = "distal" }
 skypilot = { git = "https://github.com/reeceomahoney/skypilot.git", branch = "vast-no-geo-pin" }
 torch = [{ index = "pytorch-cu126", marker = "sys_platform == 'linux'" }]
 torchvision = [{ index = "pytorch-cu126", marker = "sys_platform == 'linux'" }]
