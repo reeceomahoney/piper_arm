@@ -130,7 +130,10 @@ class RECAPPiStarTrainingConfig:
     # Sim eval
     eval_cfg: LiberoEvalConfig | LiberoPlusEvalConfig = field(
         default_factory=lambda: LiberoEvalConfig(
-            suites=["libero_10"], task_ids=[8], n_envs_per_task=50
+            suites=["libero_10"],
+            task_ids=[8],
+            n_envs_per_task=25,
+            n_episodes_per_task=2,
         )
     )
 
