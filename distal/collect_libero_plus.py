@@ -81,7 +81,7 @@ class EvalDistConfig:
             "libero_10",
         ]
     )
-    # Number of tasks rolled out in parallel within one fat AsyncVectorEnv.
+    # Number of tasks rolled out in parallel within one AsyncVectorEnv.
     # 0 = auto-scale by CPU cores. Each parallel env is a different task from
     # the same suite, batched into a single GPU policy forward per step.
     parallel_envs: int = 0
@@ -132,7 +132,7 @@ def sample_task_ids(suite_name: str, per_cell: int = 1, seed: int = 0) -> list[i
     )
 
 
-def make_fat_vec_env(
+def make_vec_env(
     env_cfg: LiberoEnvConfig,
     task_ids: list[int],
     n_envs_per_task: int = 1,
@@ -145,7 +145,7 @@ def make_fat_vec_env(
     the same suite (max_episode_steps is read off the first env, so mixing
     suites would silently truncate or over-run).
     """
-    suite = _get_suite(env_cfg.task)
+    suite = _get_suite(env_cfg.task, is_libero_plus=env_cfg.is_libero_plus)
     cameras = parse_camera_names(env_cfg.camera_name)
     gym_kwargs = dict(env_cfg.gym_kwargs)
     gym_kwargs.pop("task_ids", None)  # not consumed by env factory
@@ -262,7 +262,7 @@ def main(cfg: EvalDistConfig):
     )
 
     # ── Rollout ──
-    # Process tasks in suite-homogeneous chunks. Within a chunk, build one fat
+    # Process tasks in suite-homogeneous chunks. Within a chunk, build one
     # AsyncVectorEnv where each sub-env is a different task; eval_policy runs
     # one batched rollout, and the policy does a single batched GPU forward
     # per step (no thread-safety issues on its action queue).
@@ -291,7 +291,7 @@ def main(cfg: EvalDistConfig):
                         observation_width=256,
                         is_libero_plus=True,
                     )
-                    vec_env = make_fat_vec_env(chunk_cfg, chunk)
+                    vec_env = make_vec_env(chunk_cfg, chunk)
                     task_descs = list(vec_env.call("task_description"))
                     n_done += len(chunk)
                     print(

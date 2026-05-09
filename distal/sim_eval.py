@@ -7,7 +7,7 @@ Two modes, each with its own config dataclass and entry point:
   (distinct ``episode_index`` → distinct init states).
 - :class:`LiberoPlusEvalConfig` + :func:`run_libero_plus_eval` — LIBERO-plus.
   Each chunk packs up to ``parallel_envs`` distinct task IDs (1 env each) into
-  one fat vec env. ``per_cell`` and ``task_seed`` MUST equal the values used at
+  one vec env. ``per_cell`` and ``task_seed`` MUST equal the values used at
   collect time so eval rolls out the same task IDs that appear in the rollout
   dataset.
 
@@ -31,7 +31,7 @@ from lerobot.scripts.lerobot_eval import eval_policy as lerobot_eval_policy
 from distal.collect_libero_plus import (
     auto_parallel_envs,
     base_task_name,
-    make_fat_vec_env,
+    make_vec_env,
     sample_task_ids,
 )
 
@@ -278,7 +278,7 @@ def _run_chunks(
             env_cfg,
             envs_per_task,
         ) in enumerate(plan, start=1):
-            vec_env = make_fat_vec_env(env_cfg, chunk, n_envs_per_task=envs_per_task)
+            vec_env = make_vec_env(env_cfg, chunk, n_envs_per_task=envs_per_task)
             try:
                 chunk_videos_dir: Path | None = None
                 chunk_max_render = 0
