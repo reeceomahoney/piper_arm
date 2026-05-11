@@ -156,6 +156,35 @@ def load_or_embed_demos(
     return demo_embs
 
 
+def episode_relative_distances(
+    distances: np.ndarray,
+    dataset: LeRobotDataset,
+    frame_indices: list[int] | None,
+) -> np.ndarray:
+    """Subtract each episode's first-frame distance from all its frames.
+
+    Aligns ``distances`` with ``frame_indices`` (or the full dataset if None)
+    using ``dataset.hf_dataset["episode_index"]``. Assumes frames within an
+    episode are contiguous and sorted ascending — the natural order produced
+    by ``np.where`` over an episode mask.
+    """
+    if frame_indices is None:
+        episodes = np.array(dataset.hf_dataset["episode_index"])
+    else:
+        episodes = np.array(dataset.hf_dataset["episode_index"])[frame_indices]
+    if len(episodes) != len(distances):
+        raise ValueError(
+            f"episode index length {len(episodes)} does not match "
+            f"distance array length {len(distances)}"
+        )
+    out = distances.copy()
+    for ep in np.unique(episodes):
+        mask = episodes == ep
+        first = int(np.argmax(mask))
+        out[mask] = distances[mask] - distances[first]
+    return out
+
+
 def knn_distances(
     query: np.ndarray,
     demos: np.ndarray,

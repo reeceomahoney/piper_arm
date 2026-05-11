@@ -161,6 +161,7 @@ class KnnRewardConfig(RewardConfig):
             "observation.images.wrist": "observation.images.image2",
         }
     )
+    relative_mode: bool = False  # Use distance relative to initial frame
     demo_embs_cache_dir: str = str(Path(HF_ASSETS_CACHE) / "distal" / "demo_embs")
 
     def compute_distances(
@@ -169,9 +170,12 @@ class KnnRewardConfig(RewardConfig):
         device: torch.device,
         frame_indices: list[int] | None = None,
     ) -> np.ndarray:
-        from distal.rewards.knn import compute_knn_distances_for_dataset
+        from distal.rewards.knn import (
+            compute_knn_distances_for_dataset,
+            episode_relative_distances,
+        )
 
-        return compute_knn_distances_for_dataset(
+        distances = compute_knn_distances_for_dataset(
             dataset=dataset,
             policy_path=self.base_policy,
             device=device,
@@ -187,6 +191,9 @@ class KnnRewardConfig(RewardConfig):
             demo_embs_cache_dir=self.demo_embs_cache_dir,
             frame_indices=frame_indices,
         )
+        if self.relative_mode:
+            distances = episode_relative_distances(distances, dataset, frame_indices)
+        return distances
 
     def compute_step_rewards(
         self,
@@ -201,7 +208,8 @@ class KnnRewardConfig(RewardConfig):
         logging.info(
             f"Loading or computing kNN-distance rewards using {self.base_policy} "
             f"(demos: {self.demo_dataset_repo_id}, k={self.k}, "
-            f"metric={self.metric}, dataset cache: {dataset.repo_id})..."
+            f"metric={self.metric}, relative_mode={self.relative_mode}, "
+            f"dataset cache: {dataset.repo_id})..."
         )
         sig_dict = {
             "mode": "knn",
@@ -213,6 +221,7 @@ class KnnRewardConfig(RewardConfig):
             "demo_max_frames": self.demo_max_frames,
             "demo_subsample_seed": self.demo_subsample_seed,
             "demo_rename_map": self.demo_rename_map,
+            "relative_mode": self.relative_mode,
         }
         return load_or_compute_rewards(
             dataset=dataset,
