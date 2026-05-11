@@ -10,17 +10,12 @@ from pathlib import Path
 
 import draccus
 import numpy as np
-import torch
-from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.policies.factory import make_policy, make_pre_post_processors
-from lerobot.policies.pi05.modeling_pi05 import PI05Policy
 from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.import_utils import register_third_party_plugins
-from torch.utils.data import Subset
 
 from distal.auroc import AurocConfig
-from distal.rewards.knn import embed_dataset, knn_distances, load_or_embed_demos
+from distal.rewards.configs import KnnRewardConfig
 
 
 def percentile_table(values: np.ndarray, label: str) -> None:
@@ -118,13 +113,18 @@ def main(cfg: AurocConfig) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     register_third_party_plugins()
 
+    if not isinstance(cfg.reward, KnnRewardConfig):
+        raise ValueError(
+            f"debug_maha_rewards expects --reward.type=knn, got {cfg.reward.type}"
+        )
+
     device = get_safe_torch_device(cfg.device, log=True)
 
     print(
         f"dataset       = {cfg.dataset_repo_id}\n"
-        f"base_policy   = {cfg.policy_path}\n"
-        f"demo_dataset  = {cfg.demo_dataset_repo_id}\n"
-        f"knn           = k={cfg.knn_k} metric={cfg.knn_metric}\n"
+        f"base_policy   = {cfg.reward.base_policy}\n"
+        f"demo_dataset  = {cfg.reward.demo_dataset_repo_id}\n"
+        f"knn           = k={cfg.reward.k} metric={cfg.reward.metric}\n"
         f"device        = {device}"
     )
 
@@ -158,56 +158,12 @@ def main(cfg: AurocConfig) -> None:
 
     frame_mask = np.isin(full_episode_index, list(selected_episodes))
     frame_indices = np.where(frame_mask)[0]
-    subset = Subset(dataset, frame_indices.tolist())
-    print(f"frames = {len(subset)}  episodes = {len(selected_episodes)}")
+    print(f"frames = {len(frame_indices)}  episodes = {len(selected_episodes)}")
 
-    policy_cfg = PreTrainedConfig.from_pretrained(cfg.policy_path)
-    policy_cfg.pretrained_path = Path(cfg.policy_path)
-    policy_cfg.device = str(device)
-    policy = make_policy(cfg=policy_cfg, ds_meta=dataset.meta)
-    assert isinstance(policy, PI05Policy)
-    policy.eval()
-    preprocessor, _ = make_pre_post_processors(
-        policy_cfg=policy_cfg, pretrained_path=str(policy_cfg.pretrained_path)
-    )
-
-    demo_embs = load_or_embed_demos(
-        policy=policy,
-        policy_cfg=policy_cfg,
+    distances = cfg.reward.compute_distances(
+        dataset=dataset,
         device=device,
-        policy_path=cfg.policy_path,
-        demo_dataset_repo_id=cfg.demo_dataset_repo_id,
-        demo_max_frames=cfg.demo_max_frames,
-        demo_subsample_seed=cfg.demo_subsample_seed,
-        demo_rename_map=cfg.demo_rename_map,
-        batch_size=cfg.batch_size,
-        num_workers=cfg.num_workers,
-        cache_dir=cfg.demo_embs_cache_dir,
-    )
-
-    rollout_embs = embed_dataset(
-        policy=policy,
-        preprocessor=preprocessor,
-        dataset=subset,
-        batch_size=cfg.batch_size,
-        num_workers=cfg.num_workers,
-        device=device,
-        max_frames=None,
-        subsample_seed=0,
-        desc="Embedding rollouts",
-    )
-
-    del policy
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-    distances = knn_distances(
-        query=rollout_embs,
-        demos=demo_embs,
-        k=cfg.knn_k,
-        metric=cfg.knn_metric,
-        chunk_size=cfg.knn_chunk_size,
-        device=device,
+        frame_indices=frame_indices.tolist(),
     ).astype(np.float64)
 
     d_min, d_max = float(distances.min()), float(distances.max())

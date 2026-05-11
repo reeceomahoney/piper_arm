@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import draccus
+import numpy as np
 import torch
 from huggingface_hub.constants import HF_ASSETS_CACHE
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -45,6 +46,23 @@ class RewardConfig(draccus.ChoiceRegistry, abc.ABC):
         """Return per-frame rewards keyed by absolute frame index, or ``None``
         to fall back to the default fixed -1 per step."""
 
+    def compute_distances(
+        self,
+        dataset: LeRobotDataset,
+        device: torch.device,
+        frame_indices: list[int] | None = None,
+    ) -> np.ndarray:
+        """Return raw per-frame distances used to build rewards.
+
+        Subclasses that score frames against a reference distribution (maha,
+        knn) override this to expose the un-normalised signal for AUROC-style
+        failure detection. The default raises for reward sources without a
+        notion of distance (e.g. fixed -1 per step)."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not produce per-frame distances; "
+            "use 'maha' or 'knn'."
+        )
+
 
 @RewardConfig.register_subclass("steps")
 @dataclass
@@ -70,24 +88,53 @@ class MahaRewardConfig(RewardConfig):
     embed_batch_size: int = 128
     embed_num_workers: int = 8
 
-    def compute_step_rewards(
+    def compute_distances(
         self,
         dataset: LeRobotDataset,
         device: torch.device,
-    ) -> dict[int, float]:
-        from distal.rewards.maha import load_or_compute_maha_rewards
+        frame_indices: list[int] | None = None,
+    ) -> np.ndarray:
+        from distal.rewards.maha import compute_maha_distances_for_dataset
 
-        logging.info(
-            f"Loading or computing Mahalanobis-distance rewards using "
-            f"{self.base_policy} (dataset cache: {dataset.repo_id})..."
-        )
-        return load_or_compute_maha_rewards(
+        return compute_maha_distances_for_dataset(
             dataset=dataset,
             policy_path=self.base_policy,
             stats_path=self.stats_path,
             device=device,
             batch_size=self.embed_batch_size,
             num_workers=self.embed_num_workers,
+            frame_indices=frame_indices,
+        )
+
+    def compute_step_rewards(
+        self,
+        dataset: LeRobotDataset,
+        device: torch.device,
+    ) -> dict[int, float]:
+        from distal.rewards.maha import (
+            load_or_compute_rewards,
+            normalize_distances_to_rewards,
+        )
+
+        logging.info(
+            f"Loading or computing Mahalanobis-distance rewards using "
+            f"{self.base_policy} (dataset cache: {dataset.repo_id})..."
+        )
+        sig_dict = {
+            "mode": "maha",
+            "dataset_repo_id": dataset.repo_id,
+            "policy_path": self.base_policy,
+            "stats_path": self.stats_path,
+        }
+        return load_or_compute_rewards(
+            dataset=dataset,
+            sig_dict=sig_dict,
+            compute_fn=lambda: normalize_distances_to_rewards(
+                self.compute_distances(dataset, device),
+                dataset,
+                label="Maha",
+            ),
+            label="maha",
             use_cache=self.cache,
         )
 
@@ -116,19 +163,15 @@ class KnnRewardConfig(RewardConfig):
     )
     demo_embs_cache_dir: str = str(Path(HF_ASSETS_CACHE) / "distal" / "demo_embs")
 
-    def compute_step_rewards(
+    def compute_distances(
         self,
         dataset: LeRobotDataset,
         device: torch.device,
-    ) -> dict[int, float]:
-        from distal.rewards.knn import load_or_compute_knn_rewards
+        frame_indices: list[int] | None = None,
+    ) -> np.ndarray:
+        from distal.rewards.knn import compute_knn_distances_for_dataset
 
-        logging.info(
-            f"Loading or computing kNN-distance rewards using {self.base_policy} "
-            f"(demos: {self.demo_dataset_repo_id}, k={self.k}, "
-            f"metric={self.metric}, dataset cache: {dataset.repo_id})..."
-        )
-        return load_or_compute_knn_rewards(
+        return compute_knn_distances_for_dataset(
             dataset=dataset,
             policy_path=self.base_policy,
             device=device,
@@ -142,5 +185,43 @@ class KnnRewardConfig(RewardConfig):
             demo_subsample_seed=self.demo_subsample_seed,
             demo_rename_map=self.demo_rename_map,
             demo_embs_cache_dir=self.demo_embs_cache_dir,
+            frame_indices=frame_indices,
+        )
+
+    def compute_step_rewards(
+        self,
+        dataset: LeRobotDataset,
+        device: torch.device,
+    ) -> dict[int, float]:
+        from distal.rewards.maha import (
+            load_or_compute_rewards,
+            normalize_distances_to_rewards,
+        )
+
+        logging.info(
+            f"Loading or computing kNN-distance rewards using {self.base_policy} "
+            f"(demos: {self.demo_dataset_repo_id}, k={self.k}, "
+            f"metric={self.metric}, dataset cache: {dataset.repo_id})..."
+        )
+        sig_dict = {
+            "mode": "knn",
+            "dataset_repo_id": dataset.repo_id,
+            "policy_path": self.base_policy,
+            "knn_k": self.k,
+            "knn_metric": self.metric,
+            "demo_dataset_repo_id": self.demo_dataset_repo_id,
+            "demo_max_frames": self.demo_max_frames,
+            "demo_subsample_seed": self.demo_subsample_seed,
+            "demo_rename_map": self.demo_rename_map,
+        }
+        return load_or_compute_rewards(
+            dataset=dataset,
+            sig_dict=sig_dict,
+            compute_fn=lambda: normalize_distances_to_rewards(
+                self.compute_distances(dataset, device),
+                dataset,
+                label="kNN",
+            ),
+            label="knn",
             use_cache=self.cache,
         )

@@ -28,10 +28,6 @@ from lerobot.processor import rename_stats
 from safetensors.numpy import load_file, save_file
 from torch.utils.data import DataLoader, Subset
 
-from distal.rewards.maha import (
-    load_or_compute_rewards,
-    normalize_distances_to_rewards,
-)
 from distal.rewards.maha_stats import embed_siglip_pooled
 
 
@@ -188,7 +184,7 @@ def knn_distances(
     return np.concatenate(out)
 
 
-def compute_knn_rewards(
+def compute_knn_distances_for_dataset(
     dataset: LeRobotDataset,
     policy_path: str,
     device: torch.device,
@@ -203,8 +199,14 @@ def compute_knn_rewards(
     demo_subsample_seed: int,
     demo_rename_map: dict[str, str],
     demo_embs_cache_dir: str,
-) -> dict[int, float]:
-    """Return ``{absolute frame index -> reward in [-1, 0]}`` for the dataset."""
+    frame_indices: list[int] | None = None,
+) -> np.ndarray:
+    """Return raw mean-of-k-nearest-neighbour distances for the dataset.
+
+    If ``frame_indices`` is provided, only those frames are embedded (e.g. for
+    AUROC over a sampled subset). The full ``dataset`` is still used to build
+    the policy/preprocessor (which need ``dataset.meta``).
+    """
     policy_cfg = PreTrainedConfig.from_pretrained(policy_path)
     policy_cfg.pretrained_path = Path(policy_path)
     policy_cfg.device = str(device)
@@ -213,6 +215,10 @@ def compute_knn_rewards(
     policy.eval()
     preprocessor, _ = make_pre_post_processors(
         policy_cfg=policy_cfg, pretrained_path=str(policy_cfg.pretrained_path)
+    )
+
+    loader_ds: LeRobotDataset | Subset = (
+        Subset(dataset, frame_indices) if frame_indices is not None else dataset
     )
 
     try:
@@ -232,7 +238,7 @@ def compute_knn_rewards(
         rollout_embs = embed_dataset(
             policy=policy,
             preprocessor=preprocessor,
-            dataset=dataset,
+            dataset=loader_ds,
             batch_size=batch_size,
             num_workers=num_workers,
             device=device,
@@ -245,7 +251,7 @@ def compute_knn_rewards(
             f"between {rollout_embs.shape[0]} rollout frames and "
             f"{demo_embs.shape[0]} demo frames..."
         )
-        distances = knn_distances(
+        return knn_distances(
             query=rollout_embs,
             demos=demo_embs,
             k=knn_k,
@@ -257,62 +263,3 @@ def compute_knn_rewards(
         del policy
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-
-    return normalize_distances_to_rewards(distances, dataset, label="kNN")
-
-
-def load_or_compute_knn_rewards(
-    dataset: LeRobotDataset,
-    policy_path: str,
-    device: torch.device,
-    batch_size: int,
-    num_workers: int,
-    *,
-    knn_k: int,
-    knn_metric: str,
-    knn_chunk_size: int,
-    demo_dataset_repo_id: str,
-    demo_max_frames: int | None,
-    demo_subsample_seed: int,
-    demo_rename_map: dict[str, str],
-    demo_embs_cache_dir: str,
-    use_cache: bool = True,
-) -> dict[int, float]:
-    """Return kNN rewards for ``dataset``, using the local cache when available.
-
-    Cache key encodes everything that affects the rewards (mode, dataset repo,
-    policy, kNN hyperparams, demo set / subsample). ``knn_chunk_size`` and
-    ``demo_embs_cache_dir`` are excluded since they don't change the output.
-    """
-    sig_dict = {
-        "mode": "knn",
-        "dataset_repo_id": dataset.repo_id,
-        "policy_path": policy_path,
-        "knn_k": knn_k,
-        "knn_metric": knn_metric,
-        "demo_dataset_repo_id": demo_dataset_repo_id,
-        "demo_max_frames": demo_max_frames,
-        "demo_subsample_seed": demo_subsample_seed,
-        "demo_rename_map": demo_rename_map,
-    }
-    return load_or_compute_rewards(
-        dataset=dataset,
-        sig_dict=sig_dict,
-        compute_fn=lambda: compute_knn_rewards(
-            dataset=dataset,
-            policy_path=policy_path,
-            device=device,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            knn_k=knn_k,
-            knn_metric=knn_metric,
-            knn_chunk_size=knn_chunk_size,
-            demo_dataset_repo_id=demo_dataset_repo_id,
-            demo_max_frames=demo_max_frames,
-            demo_subsample_seed=demo_subsample_seed,
-            demo_rename_map=demo_rename_map,
-            demo_embs_cache_dir=demo_embs_cache_dir,
-        ),
-        label="knn",
-        use_cache=use_cache,
-    )

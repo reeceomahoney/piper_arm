@@ -22,6 +22,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.pi05.modeling_pi05 import PI05Policy
 from safetensors.numpy import load_file, save_file
+from torch.utils.data import Subset
 
 from distal.rewards.maha_stats import compute_maha_distances
 
@@ -85,15 +86,22 @@ def normalize_distances_to_rewards(
     return rewards
 
 
-def compute_maha_rewards(
+def compute_maha_distances_for_dataset(
     dataset: LeRobotDataset,
     policy_path: str,
     stats_path: str,
     device: torch.device,
     batch_size: int,
     num_workers: int,
-) -> dict[int, float]:
-    """Return ``{absolute frame index -> reward in [-1, 0]}`` for the dataset."""
+    *,
+    frame_indices: list[int] | None = None,
+) -> np.ndarray:
+    """Return raw per-frame Mahalanobis distances for the dataset.
+
+    If ``frame_indices`` is provided, only those frames are embedded (e.g. for
+    AUROC over a sampled subset). The full ``dataset`` is still used to build
+    the policy/preprocessor (which need ``dataset.meta``).
+    """
     mean, cov_inv = load_maha_stats(stats_path)
     logging.info(f"Loaded maha stats from {stats_path} (dim={mean.shape[0]})")
 
@@ -107,11 +115,15 @@ def compute_maha_rewards(
         policy_cfg=policy_cfg, pretrained_path=str(policy_cfg.pretrained_path)
     )
 
+    loader_ds: LeRobotDataset | Subset = (
+        Subset(dataset, frame_indices) if frame_indices is not None else dataset
+    )
+
     try:
-        distances = compute_maha_distances(
+        return compute_maha_distances(
             policy=policy,
             preprocessor=preprocessor,
-            dataset=dataset,
+            dataset=loader_ds,
             gauss_mean=mean,
             gauss_cov_inv=cov_inv,
             batch_size=batch_size,
@@ -121,8 +133,6 @@ def compute_maha_rewards(
         del policy
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-
-    return normalize_distances_to_rewards(distances, dataset, label="Maha")
 
 
 def dataset_frame_indices(dataset: LeRobotDataset) -> list[int]:
@@ -196,35 +206,3 @@ def load_or_compute_rewards(
             logging.warning(f"Failed to save {label} rewards cache: {error}")
 
     return rewards
-
-
-def load_or_compute_maha_rewards(
-    dataset: LeRobotDataset,
-    policy_path: str,
-    stats_path: str,
-    device: torch.device,
-    batch_size: int,
-    num_workers: int,
-    use_cache: bool = True,
-) -> dict[int, float]:
-    """Return maha rewards for ``dataset``, using the local cache when available."""
-    sig_dict = {
-        "mode": "maha",
-        "dataset_repo_id": dataset.repo_id,
-        "policy_path": policy_path,
-        "stats_path": stats_path,
-    }
-    return load_or_compute_rewards(
-        dataset=dataset,
-        sig_dict=sig_dict,
-        compute_fn=lambda: compute_maha_rewards(
-            dataset=dataset,
-            policy_path=policy_path,
-            stats_path=stats_path,
-            device=device,
-            batch_size=batch_size,
-            num_workers=num_workers,
-        ),
-        label="maha",
-        use_cache=use_cache,
-    )

@@ -58,7 +58,7 @@ def compute_mahalanobis_np(
 def compute_maha_distances(
     policy: PI05Policy,
     preprocessor: Any,
-    dataset: LeRobotDataset,
+    dataset: LeRobotDataset | Subset,
     gauss_mean: np.ndarray,
     gauss_cov_inv: np.ndarray,
     batch_size: int,

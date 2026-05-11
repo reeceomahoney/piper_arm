@@ -1,8 +1,7 @@
-"""Evaluate Mahalanobis distance as a failure predictor via AUROC.
+"""Evaluate Mahalanobis or kNN distance as a failure predictor via AUROC.
 
-Loads pre-computed Mahalanobis stats, embeds dataset frames, computes
-per-frame distances, aggregates per episode (mean), and reports AUROC
-against episode success labels.
+Reads per-frame distances from a ``RewardConfig`` (maha or knn), aggregates
+per episode, and reports AUROC against episode success labels.
 """
 
 import json
@@ -10,27 +9,18 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib.resources import files
-from pathlib import Path
 
 import draccus
 import numpy as np
 import torch
-from huggingface_hub import hf_hub_download
-from huggingface_hub.constants import HF_ASSETS_CACHE
-from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.policies.factory import make_policy, make_pre_post_processors
-from lerobot.policies.pi05.modeling_pi05 import PI05Policy
 from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.utils import init_logging
-from safetensors.numpy import load_file
 from sklearn.metrics import roc_auc_score
-from torch.utils.data import Subset
 
 from distal.collect_libero_plus import sample_task_ids
-from distal.rewards.knn import embed_dataset, knn_distances, load_or_embed_demos
-from distal.rewards.maha_stats import compute_mahalanobis_np
+from distal.rewards.configs import KnnRewardConfig, RewardConfig
 
 PERTURBATION_PATTERNS = {
     "language": re.compile(r"_language_"),
@@ -90,14 +80,10 @@ def replay_variant_names(
 
 @dataclass
 class AurocConfig:
-    policy_path: str = "lerobot/pi05-libero"
     dataset_repo_id: str = "reece-omahoney/pi05-libero-10"
-    maha_stats_repo_id: str = "reece-omahoney/pi05-maha-stats-siglip"
     episodes_per_kind: int = 50
     min_per_class: int = 10
     device: str = "cuda"
-    batch_size: int = 32
-    num_workers: int = 4
     seed: int = 42
 
     # Collection config used to produce dataset_repo_id. Must match the values
@@ -120,23 +106,9 @@ class AurocConfig:
     # AUROC only.
     is_libero_plus: bool = False
 
-    # kNN scoring: per-frame score = mean distance to k nearest demo embeddings.
-    # When True, maha_stats_repo_id is ignored and demo_dataset_repo_id is embedded
-    # on the fly via mean-pooled SigLIP features.
-    use_knn: bool = True
-    knn_k: int = 10
-    knn_metric: str = "l2"  # "l2" or "cosine"
-    demo_dataset_repo_id: str = "lerobot/libero_10"
-    demo_max_frames: int | None = 50_000
-    demo_subsample_seed: int = 0
-    demo_rename_map: dict[str, str] = field(
-        default_factory=lambda: {
-            "observation.images.front": "observation.images.image",
-            "observation.images.wrist": "observation.images.image2",
-        }
-    )
-    knn_chunk_size: int = 256
-    demo_embs_cache_dir: str = str(Path(HF_ASSETS_CACHE) / "distal" / "demo_embs")
+    # Per-frame distance source. Pick maha or knn via --reward.type; the
+    # 'steps' reward has no distances and will raise NotImplementedError.
+    reward: RewardConfig = field(default_factory=KnnRewardConfig)
 
 
 @draccus.wrap()
@@ -148,25 +120,6 @@ def main(cfg: AurocConfig):
     torch.backends.cudnn.benchmark = True
     torch.backends.cuda.matmul.allow_tf32 = True
 
-    # Load maha stats (skipped in kNN mode)
-    gauss_mean: np.ndarray | None = None
-    gauss_cov_inv: np.ndarray | None = None
-    if not cfg.use_knn:
-        stats_path = hf_hub_download(
-            repo_id=cfg.maha_stats_repo_id,
-            filename="stats.safetensors",
-            repo_type="dataset",
-            force_download=True,
-        )
-        stats = load_file(stats_path)
-        gauss_mean = stats["mean"]
-        gauss_cov_inv = stats["cov_inv"]
-        print(
-            f"Loaded Mahalanobis stats: mean {gauss_mean.shape}, "
-            f"cov_inv {gauss_cov_inv.shape}"
-        )
-
-    # Load dataset
     dataset = LeRobotDataset(repo_id=cfg.dataset_repo_id, vcodec="auto")
     episode_index = np.array(dataset.hf_dataset["episode_index"])
     success = np.array(dataset.hf_dataset["success"])
@@ -268,64 +221,11 @@ def main(cfg: AurocConfig):
     frame_mask = np.isin(episode_index, list(selected_episodes))
     frame_indices = np.where(frame_mask)[0]
 
-    # Load policy
-    policy_cfg = PreTrainedConfig.from_pretrained(cfg.policy_path)
-    policy_cfg.pretrained_path = Path(cfg.policy_path)
-    policy_cfg.device = str(device)
-    policy = make_policy(cfg=policy_cfg, ds_meta=dataset.meta)
-    assert isinstance(policy, PI05Policy)
-    policy.eval()
-
-    preprocessor, _ = make_pre_post_processors(
-        policy_cfg=policy_cfg, pretrained_path=str(policy_cfg.pretrained_path)
-    )
-
-    # Demo embeddings for kNN: cached locally per (policy, dataset, embedding,
-    # subsample) signature so reruns skip the expensive vision pass.
-    demo_embs: np.ndarray | None = None
-    if cfg.use_knn:
-        demo_embs = load_or_embed_demos(
-            policy=policy,
-            policy_cfg=policy_cfg,
-            device=device,
-            policy_path=cfg.policy_path,
-            demo_dataset_repo_id=cfg.demo_dataset_repo_id,
-            demo_max_frames=cfg.demo_max_frames,
-            demo_subsample_seed=cfg.demo_subsample_seed,
-            demo_rename_map=cfg.demo_rename_map,
-            batch_size=cfg.batch_size,
-            num_workers=cfg.num_workers,
-            cache_dir=cfg.demo_embs_cache_dir,
-        )
-
-    # Embed selected rollout frames
-    subset = Subset(dataset, frame_indices.tolist())
-    rollout_embs = embed_dataset(
-        policy=policy,
-        preprocessor=preprocessor,
-        dataset=subset,
-        batch_size=cfg.batch_size,
-        num_workers=cfg.num_workers,
+    distances = cfg.reward.compute_distances(
+        dataset=dataset,
         device=device,
-        max_frames=None,
-        subsample_seed=0,
-        desc="Embedding rollouts",
+        frame_indices=frame_indices.tolist(),
     )
-
-    if cfg.use_knn:
-        assert demo_embs is not None
-        print(f"Computing kNN distances (k={cfg.knn_k}, metric={cfg.knn_metric})...")
-        distances = knn_distances(
-            query=rollout_embs,
-            demos=demo_embs,
-            k=cfg.knn_k,
-            metric=cfg.knn_metric,
-            chunk_size=cfg.knn_chunk_size,
-            device=device,
-        )
-    else:
-        assert gauss_mean is not None and gauss_cov_inv is not None
-        distances = compute_mahalanobis_np(rollout_embs, gauss_mean, gauss_cov_inv)
 
     selected_episode_index = episode_index[frame_indices]
     selected_success = success[frame_indices]

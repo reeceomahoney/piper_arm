@@ -32,6 +32,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import draccus
 import numpy as np
 import torch
 from accelerate import Accelerator
@@ -55,6 +56,7 @@ from lerobot_policy_pistar06.modeling_pistar06 import PiStar06Policy
 from torch.utils.data import DataLoader
 
 from distal import advantage_cache
+from distal.rewards.configs import MahaRewardConfig, RewardConfig
 from distal.sim_eval import (
     LiberoEvalConfig,
     LiberoPlusEvalConfig,
@@ -85,7 +87,7 @@ class AdvantageConfig:
     runtime and are not user-facing knobs.
     """
 
-    value_network_pretrained_path: str = "reece-omahoney/value-knn-libero"
+    value_network_pretrained_path: str = "reece-omahoney/value-knn-libero-plus"
 
     # When set, override ``policy.advantage_threshold`` with the Nth percentile
     # of the precomputed advantage distribution (~30% positive at p=70).
@@ -104,8 +106,8 @@ class AdvantageConfig:
 class RECAPPiStarTrainingConfig:
     """Configuration for RECAP PiStar06 advantage-conditioned Pi0.5 policy training."""
 
-    job_name: str = "pistar-knn-libero"
-    dataset_repo_id: str = "reece-omahoney/pi05-libero-10"
+    job_name: str = "pistar-knn-libero-plus"
+    dataset_repo_id: str = "reece-omahoney/pi05-libero-plus"
 
     train_steps: int = 20_000
     batch_size: int = 64
@@ -706,9 +708,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         "from the dataset's 'success' column."
     )
 
-    vn_reward_mode: str = "steps"
-    vn_maha_stats_path: str | None = None
-    vn_base_policy: str | None = None
+    vn_reward: RewardConfig | None = None
     c_fail: float = 50.0
     num_value_bins: int = 50
     if cfg.policy.enable_advantage_conditioning:
@@ -725,23 +725,13 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         )
         c_fail = float(vn_train_cfg.get("c_fail", c_fail))
 
-        vn_reward_cfg = vn_train_cfg.get("reward") or {}
-        vn_reward_mode = str(vn_reward_cfg.get("type", "steps"))
-        vn_maha_stats_path = vn_reward_cfg.get("stats_path")
-        vn_base_policy = vn_reward_cfg.get("base_policy")
+        vn_reward_dict = vn_train_cfg.get("reward")
+        if vn_reward_dict:
+            vn_reward = draccus.decode(RewardConfig, vn_reward_dict)
         logging.info(
             f"Pulled from value network: c_fail={c_fail} "
-            f"num_value_bins={num_value_bins} "
-            f"reward.type={vn_reward_mode!r} "
-            f"stats_path={vn_maha_stats_path!r} "
-            f"base_policy={vn_base_policy!r}"
+            f"num_value_bins={num_value_bins} reward={vn_reward}"
         )
-        if vn_reward_mode == "maha" and vn_maha_stats_path is None:
-            raise ValueError(
-                "Value network was trained with reward.type='maha' but its "
-                "train_config.json is missing reward.stats_path; cannot "
-                "reconstruct the per-step rewards used to build R_t."
-            )
     else:
         logging.info(
             "Advantage conditioning DISABLED — training vanilla Pi0.5 "
@@ -750,34 +740,16 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         cfg.policy.advantage_dropout = 1.0
 
     step_rewards: dict[int, float] | None = None
-    if cfg.policy.enable_advantage_conditioning and vn_reward_mode == "maha":
-        from distal.rewards.maha import load_or_compute_maha_rewards
-
-        embed_policy_path = vn_base_policy or str(cfg.policy.pretrained_path)
+    if cfg.policy.enable_advantage_conditioning and vn_reward is not None:
         if is_main:
             logging.info(
-                "Loading or computing Mahalanobis-distance rewards to match the "
-                f"value network's training signal (embed policy: {embed_policy_path}, "
-                f"stats: {vn_maha_stats_path})"
+                "Reconstructing per-step rewards from VN reward config "
+                f"(type={vn_reward.type})"
             )
-            step_rewards = load_or_compute_maha_rewards(
-                dataset=full_dataset,
-                policy_path=embed_policy_path,
-                stats_path=vn_maha_stats_path,  # ty: ignore[invalid-argument-type]
-                device=device,
-                batch_size=int(vn_reward_cfg.get("embed_batch_size", 32)),
-                num_workers=int(vn_reward_cfg.get("embed_num_workers", 4)),
-            )
+            step_rewards = vn_reward.compute_step_rewards(full_dataset, device)
         accelerator.wait_for_everyone()
         if not is_main:
-            step_rewards = load_or_compute_maha_rewards(
-                dataset=full_dataset,
-                policy_path=embed_policy_path,
-                stats_path=vn_maha_stats_path,  # ty: ignore[invalid-argument-type]
-                device=device,
-                batch_size=int(vn_reward_cfg.get("embed_batch_size", 32)),
-                num_workers=int(vn_reward_cfg.get("embed_num_workers", 4)),
-            )
+            step_rewards = vn_reward.compute_step_rewards(full_dataset, device)
 
     frame_targets = build_frame_targets(
         dataset=full_dataset,
@@ -806,6 +778,10 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
 
     # ── 3. Pre-compute advantages using Pi0.5-based value network ────────
     if cfg.policy.enable_advantage_conditioning:
+        vn_reward_mode = vn_reward.type if vn_reward is not None else "steps"
+        vn_maha_stats_path = (
+            vn_reward.stats_path if isinstance(vn_reward, MahaRewardConfig) else None
+        )
         signature = advantage_cache.compute_signature(
             dataset_repo_id=cfg.dataset_repo_id,
             value_network_pretrained_path=cfg.advantage.value_network_pretrained_path,
