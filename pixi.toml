@@ -38,8 +38,6 @@ runpod = ">=1.8.2"
 pyroute2 = ">=0.9.5"
 pyopengl-accelerate = ">=3.1.10"
 future = ">=1.0.0"
-
-[feature.dev.pypi-dependencies]
 pre-commit = ">=4.5.1"
 ruff = ">=0.15.2"
 ty = ">=0.0.21"
@@ -53,7 +51,6 @@ lerobot_teleoperator_piper = { path = "lerobot_teleoperator_piper", editable = t
 
 [environments]
 default = { solve-group = "default" }
-dev = { features = ["dev"], solve-group = "default" }
 hardware = { features = ["hardware"], solve-group = "default" }
 
 # Training

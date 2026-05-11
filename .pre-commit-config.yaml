@@ -19,7 +19,7 @@ repos:
     hooks:
       - id: ty
         name: ty
-        entry: pixi run -e dev ty check
+        entry: pixi run ty check
         language: system
         types: [python]
         pass_filenames: false
