@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 
 from lerobot.configs.policies import PreTrainedConfig
+from lerobot.utils.import_utils import register_third_party_plugins
 
 from distal.value_model import RECAPValueNetwork
 
@@ -37,26 +38,21 @@ def push_value(checkpoint_dir: Path, repo_id: str, private: bool):
 
 
 def push_policy(checkpoint_dir: Path, repo_id: str, private: bool):
-    from lerobot.configs.train import TrainPipelineConfig
-    from lerobot.policies.factory import get_policy_class, make_pre_post_processors
+    from huggingface_hub import HfApi
 
     policy_config = PreTrainedConfig.from_pretrained(checkpoint_dir)
-    train_config = TrainPipelineConfig.from_pretrained(checkpoint_dir)
-    policy_config.repo_id = repo_id
-    policy_config.private = private
+    logging.info("Loaded %s policy from %s", policy_config.type, checkpoint_dir)
 
-    policy_cls = get_policy_class(policy_config.type)
-    policy = policy_cls.from_pretrained(
-        pretrained_name_or_path=str(checkpoint_dir), config=policy_config
+    api = HfApi()
+    api.create_repo(repo_id=repo_id, private=private, exist_ok=True)
+    api.upload_folder(
+        repo_id=repo_id,
+        repo_type="model",
+        folder_path=str(checkpoint_dir),
+        commit_message="Upload policy weights, train config and processors",
+        allow_patterns=["*.safetensors", "*.json", "*.yaml", "*.md"],
+        ignore_patterns=["*.tmp", "*.log"],
     )
-    logging.info("Loaded %s policy", policy_config.type)
-
-    preprocessor, postprocessor = make_pre_post_processors(
-        policy_config, pretrained_path=str(checkpoint_dir)
-    )
-    policy.push_model_to_hub(train_config)
-    preprocessor.push_to_hub(repo_id)
-    postprocessor.push_to_hub(repo_id)
 
 
 def main():
@@ -68,6 +64,7 @@ def main():
     parser.add_argument("--private", action="store_true")
     args = parser.parse_args()
 
+    register_third_party_plugins()
     checkpoint_dir = args.checkpoint_dir.resolve()
     policy_config = PreTrainedConfig.from_pretrained(checkpoint_dir)
     logging.info("Detected policy type: %s", policy_config.type)
