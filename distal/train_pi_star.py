@@ -642,8 +642,7 @@ def save_pistar_checkpoint(
     pretrained_dir = checkpoint_dir / "pretrained_model"
     pretrained_dir.mkdir(parents=True, exist_ok=True)
     policy.save_pretrained(pretrained_dir)
-    with open(pretrained_dir / "train_config.json", "w") as f:
-        json.dump(asdict(cfg), f, indent=4, default=str)
+    write_json(draccus.encode(cfg), pretrained_dir / "train_config.json")
     if metrics is not None:
         write_json(metrics, pretrained_dir / "metrics.json")
     if preprocessor is not None:
@@ -692,8 +691,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
 
     if is_main:
         checkpoints_dir.mkdir(parents=True, exist_ok=True)
-        with open(output_dir / "train_config.json", "w") as f:
-            json.dump(asdict(cfg), f, indent=4, default=str)
+        write_json(draccus.encode(cfg), output_dir / "train_config.json")
         logging.info(f"Using device: {device} (world_size={accelerator.num_processes})")
 
     wandb_run = _init_wandb(cfg) if is_main else None
