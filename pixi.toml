@@ -57,6 +57,14 @@ nvidia-npp-cu12 = ">=12,<13"
 [target.linux-aarch64.pypi-dependencies]
 nvidia-npp-cu12 = ">=12,<13"
 
+[feature.cu126.pypi-options]
+extra-index-urls = ["https://download.pytorch.org/whl/cu126"]
+index-strategy = "unsafe-best-match"
+
+[feature.cu128.pypi-options]
+extra-index-urls = ["https://download.pytorch.org/whl/cu128"]
+index-strategy = "unsafe-best-match"
+
 [feature.hardware.target.linux-64.pypi-dependencies]
 lerobot = { git = "https://github.com/reeceomahoney/lerobot", branch = "distal", extras = [
   "intelrealsense",
@@ -81,8 +89,9 @@ LD_LIBRARY_PATH = "$CONDA_PREFIX/lib/python3.12/site-packages/nvidia/npp/lib:$LD
 # ============================================================
 
 [environments]
-default = { solve-group = "default" }
-hardware = { features = ["hardware"], solve-group = "default" }
+default = { features = ["cu128"], solve-group = "cu128" }
+cu126 = { features = ["cu126"], solve-group = "cu126" }
+hardware = { features = ["hardware", "cu128"], solve-group = "cu128" }
 
 # ============================================================
 # Tasks
