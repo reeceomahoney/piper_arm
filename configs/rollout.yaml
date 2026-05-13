@@ -8,6 +8,10 @@ robot:
   type: piper
   teleop_mode: false
 
+policy:
+  path: reece-omahoney/pi05-remove-pen-lid
+  n_action_steps: 20
+
 fps: 20
 task: Remove the pen lid
 use_torch_compile: true

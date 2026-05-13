@@ -50,15 +50,9 @@ ty = ">=0.0.21"
 lerobot-doctor = ">=0.1.0, <0.2"
 
 [target.linux-64.pypi-dependencies]
-torch = { version = ">=2.7,<2.11", index = "https://download.pytorch.org/whl/cu126" }
-torchvision = { version = ">=0.22,<0.26", index = "https://download.pytorch.org/whl/cu126" }
-torchcodec = { version = ">=0.3,<0.11", index = "https://download.pytorch.org/whl/cu126" }
 nvidia-npp-cu12 = ">=12,<13"
 
 [target.linux-aarch64.pypi-dependencies]
-torch = { version = ">=2.7,<2.11", index = "https://download.pytorch.org/whl/cu126" }
-torchvision = { version = ">=0.22,<0.26", index = "https://download.pytorch.org/whl/cu126" }
-torchcodec = { version = ">=0.3,<0.11", index = "https://download.pytorch.org/whl/cu126" }
 nvidia-npp-cu12 = ">=12,<13"
 
 [feature.hardware.target.linux-64.pypi-dependencies]
@@ -95,26 +89,13 @@ hardware = { features = ["hardware"], solve-group = "default" }
 [tasks.train]
 description = "Train base policy"
 cmd = """
-accelerate launch --multi_gpu --num_processes=2 \
-  -m lerobot.scripts.lerobot_train --config_path configs/train.yaml \
-  --policy.type=pi05 \
-  --policy.repo_id=reece-omahoney/pi05-remove-pen-lid \
-  --policy.pretrained_path=lerobot/pi05_base \
-  --policy.n_action_steps=10 \
-  --policy.compile_model=true \
-  --policy.gradient_checkpointing=true \
-  --policy.dtype=bfloat16 \
-  --policy.freeze_vision_encoder=false \
-  --policy.train_expert_only=false
+accelerate launch --multi_gpu --num_processes=2 -m \
+  lerobot.scripts.lerobot_train --config_path configs/train.yaml
 """
 
 [tasks.eval]
 description = "Evaluate policy in LIBERO sim"
-cmd = """
-lerobot-eval --config_path configs/eval.yaml \
-  --policy.path=reece-omahoney/pistar-knn-libero \
-  --policy.n_action_steps=10
-"""
+cmd = "lerobot-eval --config_path configs/eval.yaml"
 
 [feature.hardware.tasks.record]
 description = "Record demonstrations via teleop"
@@ -122,11 +103,7 @@ cmd = "lerobot-record --config_path configs/record.yaml"
 
 [feature.hardware.tasks.rollout]
 description = "Rollout trained policy on physical arm"
-cmd = """
-lerobot-rollout --config_path configs/rollout.yaml \
-  --policy.path=reece-omahoney/pi05-remove-pen-lid \
-  --policy.n_action_steps=20
-"""
+cmd = "lerobot-rollout --config_path configs/rollout.yaml"
 
 [tasks.sky]
 description = "Launch on Vast via SkyPilot, or sky exec on existing cluster_id"

@@ -1,5 +1,3 @@
-# policy args need to be passed via cli
-
 env:
   type: libero
   task: libero_10
@@ -9,5 +7,10 @@ env:
 
 eval:
   n_episodes: 50
-  batch_size: 25
+  batch_size: 16
 
+policy:
+  path: reece-omahoney/pistar-knn-libero
+  n_action_steps: 10
+  dtype: bfloat16
+  device: cuda

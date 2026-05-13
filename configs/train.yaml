@@ -1,12 +1,24 @@
-job_name: pi05-remove-pen-lid
-num_workers: 8
+job_name: pi05-remove-pen-lid-2
+num_workers: 4
 batch_size: 32
 steps: 20_000
 eval_freq: 0
+save_freq: 1000
 
 dataset:
-  repo_id: reece-omahoney/remove-pen-lid
+  repo_id: reece-omahoney/remove-pen-lid-2
   use_imagenet_stats: false
+
+policy:
+  type: pi05
+  repo_id: reece-omahoney/pi05-remove-pen-lid-2
+  pretrained_path: lerobot/pi05_base
+  n_action_steps: 10
+  compile_model: true
+  gradient_checkpointing: true
+  dtype: bfloat16
+  freeze_vision_encoder: false
+  train_expert_only: false
 
 wandb:
   enable: true

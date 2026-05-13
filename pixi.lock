@@ -199,12 +199,11 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/wayland-protocols-1.47-hd8ed1ab_0.conda
       - pypi: .
       - pypi: git+https://github.com/reeceomahoney/LIBERO-plus.git?rev=distal-deps#cd94bd60f521ff3a7c7e42de171eddbf4f7620e5
-      - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#cef39cf47adc9962342d97d121ea91837764c8f2
+      - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#734b9543fa6267169f02ffa919043e9e945b8b0e
       - pypi: git+https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c
       - pypi: git+https://github.com/reeceomahoney/slurm-tools.git#fa8f95100c050282e62f923dfab6bac25e223e4e
       - pypi: https://download-r2.pytorch.org/whl/cu126/torch-2.10.0%2Bcu126-cp312-cp312-manylinux_2_28_x86_64.whl
       - pypi: https://download-r2.pytorch.org/whl/cu126/torchvision-0.25.0%2Bcu126-cp312-cp312-manylinux_2_28_x86_64.whl
-      - pypi: https://download.pytorch.org/whl/cu126/torchcodec-0.10.0%2Bcu126-cp312-cp312-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/00/b7/e3bf5133d697a08128598c8d0abc5e16377b51465a33756de24fa7dee953/aiosqlite-0.22.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/01/8e/1e35281b8ab6d5d72ebe9911edcdffa3f36b04ed9d51dec6dd140396e220/scipy-1.17.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/03/a7/03aa61fbc3c5cbf99b44d158665f9b0dd3d8059be16c460208d9e385c837/brotli-1.2.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
@@ -407,6 +406,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/c6/50/e0edd38dcd63fb26a8547f13d28f7a008bc4a3fd4eb4ff030673f22ad41a/hydra_core-1.3.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c7/4b/68f9fe268e535d79c76910519530026a4f994ce07189ac0dded45c6af825/fastapi_cli-0.0.24-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c8/e2/3c2eef44f55eafab256836d1d9479bd6a74f70c26cbfdc0639a0e23e4327/boto3-1.43.6-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/ca/a9/a2b6ee3e84c55bdd0c45fd991dde71c95a99115ec9e26938b212b4545dcf/torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/cb/a8/20d0723294217e47de6d9e2e40fd4a9d2f7c4b6ef974babd482a59743694/fastjsonschema-2.21.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/cc/1e/3fbe2fa1e8cebd62f3bb7d3321cff1640aca2e240b51d9bd624aad949260/regex-2026.5.9-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
@@ -649,12 +649,11 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
       - pypi: .
       - pypi: git+https://github.com/reeceomahoney/LIBERO-plus.git?rev=distal-deps#cd94bd60f521ff3a7c7e42de171eddbf4f7620e5
-      - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#cef39cf47adc9962342d97d121ea91837764c8f2
+      - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#734b9543fa6267169f02ffa919043e9e945b8b0e
       - pypi: git+https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c
       - pypi: git+https://github.com/reeceomahoney/slurm-tools.git#fa8f95100c050282e62f923dfab6bac25e223e4e
       - pypi: https://download-r2.pytorch.org/whl/cu126/torch-2.10.0%2Bcu126-cp312-cp312-manylinux_2_28_aarch64.whl
       - pypi: https://download-r2.pytorch.org/whl/cu126/torchvision-0.25.0%2Bcu126-cp312-cp312-manylinux_2_28_aarch64.whl
-      - pypi: https://download.pytorch.org/whl/cu126/torchcodec-0.10.0%2Bcu126-cp312-cp312-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/00/b7/e3bf5133d697a08128598c8d0abc5e16377b51465a33756de24fa7dee953/aiosqlite-0.22.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/6d/7a9cc719b3eaf4377b9c2e3edeb7ed3a81de41f96421510c0a169ca3cfd4/opencv_python-4.13.0.92-cp37-abi3-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl
@@ -725,6 +724,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/49/fa/391e437a34e55095173dca5f24070d89cbc233ff85bf1c29c93248c6588d/imageio-2.37.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4a/c8/dea564b36dedac8de21c18e1851789545bc52a0c22ece9843444d5608a6a/rignore-0.7.6-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/4b/5b/d3b460364aeb8da471c1989238ea0e56bec24b6042a68046adf3d9ddb01c/watchfiles-1.1.1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+      - pypi: https://files.pythonhosted.org/packages/4b/85/3b41034b0f1289423745f918ace2a1e1e86b9c578c2e2461b6afcbb5354a/torchcodec-0.11.1-cp312-cp312-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/4c/65/b4b86e5fa07543bfbbcdc6c9f7f9f561e66a5f3539992e3009973f2b1314/jupytext-1.19.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4d/9d/14e076406388efa2bbea2366ec0bbe85e2536787ebbb374dda792f068222/cmake-4.1.3-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/50/22/cee06af4ffcfb0e8aba047bd44f5262e644199ae7527ae2c1f672b86495c/setproctitle-1.3.7-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
@@ -1054,7 +1054,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: .
-      - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#cef39cf47adc9962342d97d121ea91837764c8f2
+      - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#734b9543fa6267169f02ffa919043e9e945b8b0e
       - pypi: git+https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c
       - pypi: git+https://github.com/reeceomahoney/slurm-tools.git#fa8f95100c050282e62f923dfab6bac25e223e4e
       - pypi: https://files.pythonhosted.org/packages/00/b7/e3bf5133d697a08128598c8d0abc5e16377b51465a33756de24fa7dee953/aiosqlite-0.22.1-py3-none-any.whl
@@ -1461,12 +1461,11 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/wayland-protocols-1.47-hd8ed1ab_0.conda
       - pypi: .
       - pypi: git+https://github.com/reeceomahoney/LIBERO-plus.git?rev=distal-deps#cd94bd60f521ff3a7c7e42de171eddbf4f7620e5
-      - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#cef39cf47adc9962342d97d121ea91837764c8f2
+      - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#734b9543fa6267169f02ffa919043e9e945b8b0e
       - pypi: git+https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c
       - pypi: git+https://github.com/reeceomahoney/slurm-tools.git#fa8f95100c050282e62f923dfab6bac25e223e4e
       - pypi: https://download-r2.pytorch.org/whl/cu126/torch-2.10.0%2Bcu126-cp312-cp312-manylinux_2_28_x86_64.whl
       - pypi: https://download-r2.pytorch.org/whl/cu126/torchvision-0.25.0%2Bcu126-cp312-cp312-manylinux_2_28_x86_64.whl
-      - pypi: https://download.pytorch.org/whl/cu126/torchcodec-0.10.0%2Bcu126-cp312-cp312-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/00/b7/e3bf5133d697a08128598c8d0abc5e16377b51465a33756de24fa7dee953/aiosqlite-0.22.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/01/8e/1e35281b8ab6d5d72ebe9911edcdffa3f36b04ed9d51dec6dd140396e220/scipy-1.17.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/03/a7/03aa61fbc3c5cbf99b44d158665f9b0dd3d8059be16c460208d9e385c837/brotli-1.2.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
@@ -1673,6 +1672,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/c6/50/e0edd38dcd63fb26a8547f13d28f7a008bc4a3fd4eb4ff030673f22ad41a/hydra_core-1.3.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c7/4b/68f9fe268e535d79c76910519530026a4f994ce07189ac0dded45c6af825/fastapi_cli-0.0.24-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c8/e2/3c2eef44f55eafab256836d1d9479bd6a74f70c26cbfdc0639a0e23e4327/boto3-1.43.6-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/ca/a9/a2b6ee3e84c55bdd0c45fd991dde71c95a99115ec9e26938b212b4545dcf/torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/cb/a8/20d0723294217e47de6d9e2e40fd4a9d2f7c4b6ef974babd482a59743694/fastjsonschema-2.21.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/cc/1e/3fbe2fa1e8cebd62f3bb7d3321cff1640aca2e240b51d9bd624aad949260/regex-2026.5.9-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
@@ -1919,12 +1919,11 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
       - pypi: .
       - pypi: git+https://github.com/reeceomahoney/LIBERO-plus.git?rev=distal-deps#cd94bd60f521ff3a7c7e42de171eddbf4f7620e5
-      - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#cef39cf47adc9962342d97d121ea91837764c8f2
+      - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#734b9543fa6267169f02ffa919043e9e945b8b0e
       - pypi: git+https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c
       - pypi: git+https://github.com/reeceomahoney/slurm-tools.git#fa8f95100c050282e62f923dfab6bac25e223e4e
       - pypi: https://download-r2.pytorch.org/whl/cu126/torch-2.10.0%2Bcu126-cp312-cp312-manylinux_2_28_aarch64.whl
       - pypi: https://download-r2.pytorch.org/whl/cu126/torchvision-0.25.0%2Bcu126-cp312-cp312-manylinux_2_28_aarch64.whl
-      - pypi: https://download.pytorch.org/whl/cu126/torchcodec-0.10.0%2Bcu126-cp312-cp312-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/00/b7/e3bf5133d697a08128598c8d0abc5e16377b51465a33756de24fa7dee953/aiosqlite-0.22.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/6d/7a9cc719b3eaf4377b9c2e3edeb7ed3a81de41f96421510c0a169ca3cfd4/opencv_python-4.13.0.92-cp37-abi3-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl
@@ -1995,6 +1994,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/49/fa/391e437a34e55095173dca5f24070d89cbc233ff85bf1c29c93248c6588d/imageio-2.37.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4a/c8/dea564b36dedac8de21c18e1851789545bc52a0c22ece9843444d5608a6a/rignore-0.7.6-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/4b/5b/d3b460364aeb8da471c1989238ea0e56bec24b6042a68046adf3d9ddb01c/watchfiles-1.1.1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+      - pypi: https://files.pythonhosted.org/packages/4b/85/3b41034b0f1289423745f918ace2a1e1e86b9c578c2e2461b6afcbb5354a/torchcodec-0.11.1-cp312-cp312-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/4c/65/b4b86e5fa07543bfbbcdc6c9f7f9f561e66a5f3539992e3009973f2b1314/jupytext-1.19.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4d/9d/14e076406388efa2bbea2366ec0bbe85e2536787ebbb374dda792f068222/cmake-4.1.3-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/50/22/cee06af4ffcfb0e8aba047bd44f5262e644199ae7527ae2c1f672b86495c/setproctitle-1.3.7-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
@@ -2324,7 +2324,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: .
-      - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#cef39cf47adc9962342d97d121ea91837764c8f2
+      - pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#734b9543fa6267169f02ffa919043e9e945b8b0e
       - pypi: git+https://github.com/reeceomahoney/skypilot.git?branch=vast-no-geo-pin#1b156c120ead15d10863ab1832b80b6a076ed08c
       - pypi: git+https://github.com/reeceomahoney/slurm-tools.git#fa8f95100c050282e62f923dfab6bac25e223e4e
       - pypi: https://files.pythonhosted.org/packages/00/b7/e3bf5133d697a08128598c8d0abc5e16377b51465a33756de24fa7dee953/aiosqlite-0.22.1-py3-none-any.whl
@@ -8904,12 +8904,14 @@ packages:
   - scikit-image
   - gymnasium
   requires_python: '>=3'
-- pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#cef39cf47adc9962342d97d121ea91837764c8f2
+- pypi: git+https://github.com/reeceomahoney/lerobot?branch=distal#734b9543fa6267169f02ffa919043e9e945b8b0e
   name: lerobot
   version: 0.5.2
   requires_dist:
-  - torch>=2.7,<2.11.0
-  - torchvision>=0.22.0,<0.26.0
+  - torch>=2.7,<2.12.0 ; sys_platform == 'linux'
+  - torch>=2.7,<2.12.0 ; sys_platform != 'linux'
+  - torchvision>=0.22.0,<0.27.0 ; sys_platform == 'linux'
+  - torchvision>=0.22.0,<0.27.0 ; sys_platform != 'linux'
   - numpy>=2.0.0,<2.3.0
   - opencv-python-headless>=4.9.0,<4.14.0
   - pillow>=10.0.0,<13.0.0
@@ -8928,7 +8930,9 @@ packages:
   - pandas>=2.0.0,<3.0.0 ; extra == 'dataset'
   - pyarrow>=21.0.0,<30.0.0 ; extra == 'dataset'
   - lerobot[av-dep] ; extra == 'dataset'
-  - torchcodec>=0.3.0,<0.11.0 ; (platform_machine != 'aarch64' and platform_machine != 'arm64' and platform_machine != 'armv7l' and platform_machine != 'x86_64' and sys_platform != 'win32' and extra == 'dataset') or (platform_machine == 'aarch64' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'dataset') or (platform_machine == 'arm64' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'dataset') or (platform_machine == 'armv7l' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'dataset') or (platform_machine == 'x86_64' and sys_platform != 'darwin' and sys_platform != 'win32' and extra == 'dataset')
+  - torchcodec>=0.3.0,<0.12.0 ; (platform_machine == 'AMD64' and sys_platform == 'linux' and extra == 'dataset') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'dataset') or (platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'dataset')
+  - torchcodec>=0.7.0,<0.12.0 ; sys_platform == 'win32' and extra == 'dataset'
+  - torchcodec>=0.11.0,<0.12.0 ; (platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'dataset') or (platform_machine == 'arm64' and sys_platform == 'linux' and extra == 'dataset')
   - jsonlines>=4.0.0,<5.0.0 ; extra == 'dataset'
   - lerobot[dataset] ; extra == 'training'
   - accelerate>=1.10.0,<2.0.0 ; extra == 'training'
@@ -8946,7 +8950,7 @@ packages:
   - av>=15.0.0,<16.0.0 ; extra == 'av-dep'
   - pygame>=2.5.1,<2.7.0 ; extra == 'pygame-dep'
   - placo>=0.9.6,<0.9.17 ; extra == 'placo-dep'
-  - transformers>=5.4.0,<5.6.0 ; extra == 'transformers-dep'
+  - transformers>=5.3.0,<5.6.0 ; extra == 'transformers-dep'
   - grpcio==1.73.1 ; extra == 'grpcio-dep'
   - protobuf>=6.31.1,<6.32.0 ; extra == 'grpcio-dep'
   - python-can>=4.2.0,<5.0.0 ; extra == 'can-dep'
@@ -9020,6 +9024,7 @@ packages:
   - lerobot[transformers-dep] ; extra == 'eo1'
   - lerobot[qwen-vl-utils-dep] ; extra == 'eo1'
   - lerobot[transformers-dep] ; extra == 'hilserl'
+  - lerobot[dataset] ; extra == 'hilserl'
   - gym-hil>=0.1.13,<0.2.0 ; extra == 'hilserl'
   - lerobot[grpcio-dep] ; extra == 'hilserl'
   - lerobot[placo-dep] ; extra == 'hilserl'
@@ -9472,45 +9477,45 @@ packages:
   - grpcio>=1.63.0 ; extra == 'verda'
   - protobuf>=5.26.1,<7.0.0 ; extra == 'verda'
   - aiosqlite ; extra == 'verda'
-  - azure-mgmt-compute>=33.0.0 ; extra == 'all'
-  - tomli ; extra == 'all'
-  - pyopenssl>=23.2.0 ; extra == 'all'
-  - google-cloud-storage ; extra == 'all'
-  - python-dateutil ; extra == 'all'
-  - msgraph-sdk ; extra == 'all'
-  - colorama<0.4.7 ; extra == 'all'
   - passlib ; extra == 'all'
-  - oci ; extra == 'all'
-  - azure-core>=1.24.0 ; extra == 'all'
-  - boto3>=1.26.1 ; extra == 'all'
-  - msrestazure ; extra == 'all'
-  - pycares<5 ; extra == 'all'
-  - pydo>=0.3.0 ; extra == 'all'
-  - protobuf>=5.26.1,<7.0.0 ; extra == 'all'
-  - ecsapi==0.4.0 ; extra == 'all'
-  - pyjwt ; extra == 'all'
+  - cudo-compute>=0.1.10 ; extra == 'all'
   - azure-mgmt-network>=27.0.0 ; extra == 'all'
-  - sqlalchemy-adapter ; extra == 'all'
-  - botocore>=1.29.10 ; extra == 'all'
-  - google-api-python-client>=2.69.0 ; extra == 'all'
+  - awscli>=1.27.10 ; extra == 'all'
   - nebius>=0.3.12 ; extra == 'all'
   - azure-identity>=1.19.0 ; extra == 'all'
-  - runpod>=1.6.1 ; extra == 'all'
-  - cudo-compute>=0.1.10 ; extra == 'all'
-  - azure-common ; extra == 'all'
-  - kubernetes>=20.0.0,!=32.0.0 ; extra == 'all'
-  - azure-core>=1.31.0 ; extra == 'all'
-  - casbin ; extra == 'all'
-  - python-hostlist ; extra == 'all'
-  - grpcio>=1.63.0 ; extra == 'all'
-  - aiosqlite ; extra == 'all'
   - pyvmomi==8.0.1.0.2 ; extra == 'all'
-  - azure-cli>=2.65.0 ; extra == 'all'
-  - websockets ; extra == 'all'
-  - azure-storage-blob>=12.23.1 ; extra == 'all'
+  - pydo>=0.3.0 ; extra == 'all'
+  - kubernetes>=20.0.0,!=32.0.0 ; extra == 'all'
+  - aiosqlite ; extra == 'all'
+  - pyjwt ; extra == 'all'
+  - msrestazure ; extra == 'all'
+  - python-hostlist ; extra == 'all'
+  - ecsapi==0.4.0 ; extra == 'all'
+  - tomli ; extra == 'all'
+  - azure-core>=1.24.0 ; extra == 'all'
+  - azure-mgmt-compute>=33.0.0 ; extra == 'all'
+  - pycares<5 ; extra == 'all'
   - aiohttp ; extra == 'all'
-  - awscli>=1.27.10 ; extra == 'all'
+  - oci ; extra == 'all'
+  - runpod>=1.6.1 ; extra == 'all'
+  - azure-cli>=2.65.0 ; extra == 'all'
+  - grpcio>=1.63.0 ; extra == 'all'
+  - pyopenssl>=23.2.0 ; extra == 'all'
+  - botocore>=1.29.10 ; extra == 'all'
+  - azure-storage-blob>=12.23.1 ; extra == 'all'
+  - google-cloud-storage ; extra == 'all'
+  - colorama<0.4.7 ; extra == 'all'
+  - boto3>=1.26.1 ; extra == 'all'
+  - azure-core>=1.31.0 ; extra == 'all'
+  - google-api-python-client>=2.69.0 ; extra == 'all'
+  - sqlalchemy-adapter ; extra == 'all'
   - anyio ; extra == 'all'
+  - websockets ; extra == 'all'
+  - python-dateutil ; extra == 'all'
+  - azure-common ; extra == 'all'
+  - msgraph-sdk ; extra == 'all'
+  - casbin ; extra == 'all'
+  - protobuf>=5.26.1,<7.0.0 ; extra == 'all'
   - grpcio>=1.63.0 ; extra == 'remote'
   - protobuf>=5.26.1,<7.0.0 ; extra == 'remote'
   - casbin ; extra == 'server'
@@ -9620,26 +9625,6 @@ packages:
   - pillow>=5.3.0,!=8.3.*
   - gdown>=4.7.3 ; extra == 'gdown'
   - scipy ; extra == 'scipy'
-  requires_python: '>=3.10'
-- pypi: https://download.pytorch.org/whl/cu126/torchcodec-0.10.0%2Bcu126-cp312-cp312-manylinux_2_28_aarch64.whl
-  name: torchcodec
-  version: 0.10.0+cu126
-  sha256: cf8eb917f4182e0fdea5fcabf089ae29cab64241a53b70bbf85bed830864a3fc
-  index: https://download.pytorch.org/whl/cu126
-  requires_dist:
-  - numpy ; extra == 'dev'
-  - pytest ; extra == 'dev'
-  - pillow ; extra == 'dev'
-  requires_python: '>=3.10'
-- pypi: https://download.pytorch.org/whl/cu126/torchcodec-0.10.0%2Bcu126-cp312-cp312-manylinux_2_28_x86_64.whl
-  name: torchcodec
-  version: 0.10.0+cu126
-  sha256: e6bcca5e66a2fd1b6998de8fd474edd8731b1f35f7405d51eb148d13daf34c66
-  index: https://download.pytorch.org/whl/cu126
-  requires_dist:
-  - numpy ; extra == 'dev'
-  - pytest ; extra == 'dev'
-  - pillow ; extra == 'dev'
   requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/00/b7/e3bf5133d697a08128598c8d0abc5e16377b51465a33756de24fa7dee953/aiosqlite-0.22.1-py3-none-any.whl
   name: aiosqlite
@@ -11348,6 +11333,15 @@ packages:
   requires_dist:
   - anyio>=3.0.0
   requires_python: '>=3.9'
+- pypi: https://files.pythonhosted.org/packages/4b/85/3b41034b0f1289423745f918ace2a1e1e86b9c578c2e2461b6afcbb5354a/torchcodec-0.11.1-cp312-cp312-manylinux_2_28_aarch64.whl
+  name: torchcodec
+  version: 0.11.1
+  sha256: f1aee486a84247fcaa67870ac5005aa8d382a9839e91e476fa71b5b3d9fda9b7
+  requires_dist:
+  - numpy ; extra == 'dev'
+  - pytest ; extra == 'dev'
+  - pillow ; extra == 'dev'
+  requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/4b/f8/d0118a2f5f23b02cd166fa385c60f9b0d4f9194f574e2b31cef350ad7223/charset_normalizer-3.4.7-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
   name: charset-normalizer
   version: 3.4.7
@@ -14437,6 +14431,15 @@ packages:
   version: 1.17.3
   sha256: 3af60380ba0b7b5aeb329bc4e402acd25bd877e98b3727b0135cb5c2efdaefe9
   requires_python: '>=3.8'
+- pypi: https://files.pythonhosted.org/packages/ca/a9/a2b6ee3e84c55bdd0c45fd991dde71c95a99115ec9e26938b212b4545dcf/torchcodec-0.11.1-cp312-cp312-manylinux_2_28_x86_64.whl
+  name: torchcodec
+  version: 0.11.1
+  sha256: 6c26e90e7aa982302644d0af8cb706318682bb390f48a80ecbfeab03499acd04
+  requires_dist:
+  - numpy ; extra == 'dev'
+  - pytest ; extra == 'dev'
+  - pillow ; extra == 'dev'
+  requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/cb/a8/20d0723294217e47de6d9e2e40fd4a9d2f7c4b6ef974babd482a59743694/fastjsonschema-2.21.2-py3-none-any.whl
   name: fastjsonschema
   version: 2.21.2
