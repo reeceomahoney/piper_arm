@@ -9,13 +9,14 @@ script only handles policy loading, preprocessor wiring, and writing the
 
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-os.environ.setdefault("MUJOCO_GL", "egl")
-os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+# isort: off
+# Need this to prevent lib errors
+import wand.api  # noqa: F401
+# isort: on
 
 import draccus
 import torch
