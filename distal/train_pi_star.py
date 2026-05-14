@@ -24,7 +24,6 @@ training/validation batches via a lookup dict keyed by absolute frame index.
 """
 
 import gc
-import json
 import logging
 import resource
 import time as time_module
@@ -33,13 +32,11 @@ from datetime import datetime
 from pathlib import Path
 
 import draccus
-import numpy as np
 import torch
 from accelerate import Accelerator
 from accelerate.utils import DistributedDataParallelKwargs, broadcast_object_list
 from lerobot.common.train_utils import save_training_state
 from lerobot.configs import parser
-from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType
 from lerobot.datasets.factory import resolve_delta_timestamps
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -55,9 +52,12 @@ from lerobot_policy_pistar06.configuration_pistar06 import PiStar06Config
 from lerobot_policy_pistar06.modeling_pistar06 import PiStar06Policy
 from torch.utils.data import DataLoader
 
-from distal import advantage_cache
-from distal.collect_libero_plus import base_task_name
-from distal.rewards.configs import MahaRewardConfig, RewardConfig
+from distal.advantages import (
+    AdvantageConfig,
+    inject_advantages,
+    load_vn_metadata,
+    prepare_advantages,
+)
 from distal.sim_eval import (
     LiberoEvalConfig,
     LiberoPlusEvalConfig,
@@ -65,52 +65,12 @@ from distal.sim_eval import (
     run_libero_plus_eval,
 )
 from distal.train_value import (
-    FrameTarget,
-    build_episode_infos,
     build_frame_targets,
     format_duration,
     is_known_video_validation_error,
     load_episode_success_from_dataset,
     split_train_val_targets,
 )
-from distal.value_model import RECAPValueConfig, RECAPValueNetwork
-from distal.variant_names import try_load_variant_names
-
-
-@dataclass
-class AdvantageConfig:
-    """Runtime advantage-conditioning options.
-
-    Policy-level knobs (enable_advantage_conditioning, c_fail,
-    advantage_threshold, advantage_dropout, cfg_beta) live on PiStar06Config
-    and are accessed via ``cfg.policy.*`` — override on the CLI as e.g.
-    ``--policy.advantage_threshold=0.05``.
-
-    ``c_fail`` and ``num_value_bins`` are pulled from the value network at
-    runtime and are not user-facing knobs.
-    """
-
-    value_network_pretrained_path: str = "reece-omahoney/value-knn-rel-libero-plus"
-
-    # When set, override ``policy.advantage_threshold`` with the Nth percentile
-    # of the precomputed advantage distribution (~30% positive at p=70).
-    threshold_percentile: float | None = 70.0
-
-    # When True, compute the percentile threshold per base task and shift each
-    # frame's advantage by its task threshold. For LIBERO-plus datasets,
-    # ``meta/variant_names.json`` (written by collect_libero_plus.py, or
-    # backfilled by distal/backfill_variant_names.py) is used to collapse
-    # variants to base tasks; otherwise grouping falls back to the dataset's
-    # raw task string.
-    per_task_threshold: bool = True
-
-    # Value network advantage precomputation batch size
-    vn_batch_size: int = 640
-
-    # Cache pre-computed advantages locally at
-    # ``$HF_ASSETS_CACHE/distal/advantages/<signature>.json``, content-addressed
-    # by every input that affects the result. Set to False to always recompute.
-    cache: bool = True
 
 
 @dataclass
@@ -196,31 +156,6 @@ def _init_wandb(cfg: RECAPPiStarTrainingConfig):
     return run
 
 
-def _load_vn_train_config(path_or_repo_id: str) -> dict:
-    """Best-effort load of train_config.json from a local dir or HF repo."""
-    local = Path(path_or_repo_id).expanduser() / "train_config.json"
-    if local.is_file():
-        config_path = str(local)
-    else:
-        from huggingface_hub import hf_hub_download
-        from huggingface_hub.errors import EntryNotFoundError
-
-        try:
-            config_path = hf_hub_download(
-                repo_id=path_or_repo_id,
-                filename="train_config.json",
-                repo_type="model",
-            )
-        except (EntryNotFoundError, FileNotFoundError):
-            logging.warning(
-                f"No train_config.json in '{path_or_repo_id}'; "
-                "cannot auto-resolve c_fail."
-            )
-            return {}
-    with open(config_path) as f:
-        return json.load(f)
-
-
 def _resolve_policy_config(
     cfg: RECAPPiStarTrainingConfig,
     train_dataset: LeRobotDataset,
@@ -245,278 +180,6 @@ def _resolve_policy_config(
     cfg.policy.c_fail = c_fail
     policy_cfg = cfg.policy
     return policy_cfg
-
-
-# ── Advantage pre-computation ────────────────────────────────────────────────
-
-
-def _make_vn_preprocessor(policy_cfg, dataset_stats, tokenizer_name: str):
-    """Build a lightweight preprocessor for VN advantage precomputation.
-
-    Omits DeviceProcessorStep (VN handles device transfer internally) and
-    AddBatchDimensionProcessorStep (DataLoader already batches).
-    """
-    from lerobot.policies.pi05.processor_pi05 import (
-        Pi05PrepareStateTokenizerProcessorStep,
-    )
-    from lerobot.processor import (
-        NormalizerProcessorStep,
-        PolicyProcessorPipeline,
-        TokenizerProcessorStep,
-    )
-
-    steps = [
-        NormalizerProcessorStep(
-            features={**policy_cfg.input_features, **policy_cfg.output_features},
-            norm_map=policy_cfg.normalization_mapping,
-            stats=dataset_stats,
-        ),
-        Pi05PrepareStateTokenizerProcessorStep(max_state_dim=policy_cfg.max_state_dim),
-        TokenizerProcessorStep(
-            tokenizer_name=tokenizer_name,
-            max_length=policy_cfg.tokenizer_max_length,
-            padding_side="right",
-            padding="max_length",
-        ),
-    ]
-    return PolicyProcessorPipeline(steps=steps, name="vn_preprocessor")
-
-
-@torch.no_grad()
-def _precompute_advantages(
-    full_dataset: LeRobotDataset,
-    frame_targets: list[FrameTarget],
-    value_network: RECAPValueNetwork,
-    policy_cfg,
-    device: torch.device,
-    batch_size: int = 4,
-    num_workers: int = 0,
-) -> tuple[dict[int, float], dict[int, int]]:
-    """Pre-compute per-frame advantages using the frozen value network.
-
-    Builds a lightweight preprocessor internally that produces only the
-    fields consumed by ``RECAPValueNetwork`` (language tokens + images),
-    without moving every tensor to GPU.
-    """
-    preprocessor = _make_vn_preprocessor(
-        policy_cfg, full_dataset.meta.stats, value_network.config.text_backbone
-    )
-
-    vn = value_network
-    vn.eval()
-    vn.to(device)
-    for param in vn.parameters():
-        param.requires_grad = False
-    logging.info(
-        f"Value network loaded: {sum(p.numel() for p in vn.parameters()):,} params"
-    )
-    _log_memory("post-VN-load")
-
-    R_t_by_abs_index: dict[int, float] = {}
-    for ft in frame_targets:
-        abs_idx = int(full_dataset.hf_dataset[ft.frame_index]["index"])
-        R_t_by_abs_index[abs_idx] = ft.target_value
-
-    loader = DataLoader(
-        full_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=(device.type == "cuda"),
-        drop_last=False,
-        prefetch_factor=2 if num_workers > 0 else None,
-    )
-
-    advantage_lookup: dict[int, float] = {}
-    episode_lookup: dict[int, int] = {}
-    total_frames = 0
-    n_total = len(full_dataset)
-    log_every_n_batches = 10
-    start_time = time_module.perf_counter()
-
-    for batch_idx, batch in enumerate(loader):
-        abs_indices = batch["index"]
-        ep_indices = batch["episode_index"]
-        B = abs_indices.shape[0]
-
-        batch = preprocessor(batch)
-        model_batch = {
-            k: v.to(device, non_blocking=True)
-            for k, v in batch.items()
-            if isinstance(v, torch.Tensor)
-        }
-        V_t = vn.predict_value(model_batch).cpu()  # ty: ignore[missing-argument, invalid-argument-type]
-
-        for i in range(B):
-            abs_idx = int(abs_indices[i].item())
-            R_t = R_t_by_abs_index.get(abs_idx)
-            if R_t is not None:
-                advantage_lookup[abs_idx] = R_t - V_t[i].item()
-                episode_lookup[abs_idx] = int(ep_indices[i].item())
-
-        total_frames += B
-        if (batch_idx + 1) % log_every_n_batches == 0 or total_frames >= n_total:
-            elapsed = time_module.perf_counter() - start_time
-            frames_per_sec = total_frames / max(elapsed, 1e-9)
-            eta = max(n_total - total_frames, 0) / max(frames_per_sec, 1e-9)
-            logging.info(
-                f"  Pre-computed advantages for {total_frames}/{n_total} frames "
-                f"({frames_per_sec:.1f} frames/s, "
-                f"elapsed={format_duration(elapsed)}, "
-                f"eta={format_duration(eta)})"
-            )
-
-    logging.info(
-        f"Advantage pre-computation complete: {len(advantage_lookup)} frames, "
-        f"mean={sum(advantage_lookup.values()) / max(1, len(advantage_lookup)):.4f}"
-    )
-
-    del vn, preprocessor
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-    return advantage_lookup, episode_lookup
-
-
-def _compute_advantage_threshold(
-    advantage_lookup: dict[int, float],
-    percentile: float,
-) -> float:
-    """Compute an advantage threshold from the Nth percentile of the distribution.
-
-    Following the paper (Appendix A.4): during pre-training the threshold is set
-    so that ~30% of frames are positive (percentile=70); during fine-tuning ~40%
-    are positive (percentile=60).
-    """
-    values = np.array(list(advantage_lookup.values()))
-    threshold = float(np.percentile(values, percentile))
-    pct_positive = float((values > threshold).sum()) / len(values) * 100
-
-    logging.info(
-        f"Advantage distribution ({len(values)} frames): "
-        f"mean={values.mean():.5f} std={values.std():.5f} "
-        f"min={values.min():.5f} max={values.max():.5f}"
-    )
-    logging.info(
-        f"Auto-threshold from {percentile:.0f}th percentile: {threshold:.5f} "
-        f"({pct_positive:.1f}% of frames will be positive)"
-    )
-    return threshold
-
-
-def _build_abs_to_task(dataset: LeRobotDataset) -> dict[int, str]:
-    """Map every absolute frame index to a stable per-task label.
-
-    For LIBERO-plus datasets (those with a ``meta/variant_names.json``
-    sidecar) we collapse variants to base tasks via ``base_task_name``,
-    because the dataset's stored ``task`` string is the rewritten natural
-    language for language perturbations and so doesn't identify the
-    underlying task. For base LIBERO the dataset's ``task`` string already
-    names the base task and is used directly.
-    """
-    ep_to_variant = try_load_variant_names(dataset)
-    ep_to_task: dict[int, str] | None = None
-    if ep_to_variant is not None:
-        ep_to_task = {ep: base_task_name(v) for ep, v in ep_to_variant.items()}
-        logging.info(
-            f"Loaded variant_names sidecar ({len(ep_to_variant)} episodes); "
-            f"grouping by base_task_name → {len({*ep_to_task.values()})} tasks"
-        )
-    else:
-        logging.info(
-            "No variant_names sidecar found — grouping by the dataset's raw task string"
-        )
-
-    episode_infos = build_episode_infos(dataset)
-    abs_to_task: dict[int, str] = {}
-    for info in episode_infos.values():
-        task = ep_to_task[info.episode_index] if ep_to_task is not None else info.task
-        for abs_idx in range(info.start_index, info.end_index):
-            abs_to_task[abs_idx] = task
-    return abs_to_task
-
-
-def _compute_per_task_thresholds(
-    advantage_lookup: dict[int, float],
-    abs_to_task: dict[int, str],
-    percentile: float,
-) -> dict[str, float]:
-    """Compute the Nth percentile of advantages within each task group."""
-    by_task: dict[str, list[float]] = {}
-    for abs_idx, adv in advantage_lookup.items():
-        task = abs_to_task.get(abs_idx)
-        if task is None:
-            continue
-        by_task.setdefault(task, []).append(adv)
-
-    thresholds = {
-        task: float(np.percentile(np.asarray(vals, dtype=np.float64), percentile))
-        for task, vals in by_task.items()
-    }
-
-    all_values = np.asarray(list(advantage_lookup.values()), dtype=np.float64)
-    global_th = float(np.percentile(all_values, percentile))
-    th_values = np.asarray(list(thresholds.values()), dtype=np.float64)
-    logging.info(
-        f"Per-task thresholds @ p{percentile:.0f} across {len(thresholds)} tasks: "
-        f"global_th={global_th:+.5f}  "
-        f"per_task range [{th_values.min():+.5f}, {th_values.max():+.5f}]  "
-        f"mean_diff={(th_values - global_th).mean():+.5f}  "
-        f"std_diff={(th_values - global_th).std():.5f}"
-    )
-    for task in sorted(thresholds):
-        n = len(by_task[task])
-        diff = thresholds[task] - global_th
-        logging.info(
-            f"  {task}: n={n} th={thresholds[task]:+.5f} diff_vs_global={diff:+.5f}"
-        )
-    return thresholds
-
-
-def _shift_advantages_by_task(
-    advantage_lookup: dict[int, float],
-    abs_to_task: dict[int, str],
-    task_thresholds: dict[str, float],
-) -> dict[int, float]:
-    """Subtract each frame's task threshold from its advantage.
-
-    After this shift, ``adv > 0`` equals ``raw_adv > task_threshold`` per
-    frame, so the policy's existing ``advantage > advantage_threshold`` check
-    works with ``advantage_threshold=0``. Frames whose task is missing from
-    the thresholds dict are left unshifted (defensive fallback).
-    """
-    shifted: dict[int, float] = {}
-    missing = 0
-    for abs_idx, adv in advantage_lookup.items():
-        task = abs_to_task.get(abs_idx)
-        if task is None or task not in task_thresholds:
-            missing += 1
-            shifted[abs_idx] = adv
-            continue
-        shifted[abs_idx] = adv - task_thresholds[task]
-    if missing:
-        logging.warning(
-            f"_shift_advantages_by_task: {missing} frames had no task threshold "
-            "and were left unshifted"
-        )
-    return shifted
-
-
-def _inject_advantages(
-    batch: dict,
-    advantage_lookup: dict[int, float],
-    device: torch.device,
-) -> dict:
-    """Inject pre-computed advantages into a batch dict."""
-    abs_indices = batch["index"]
-    advantages = torch.tensor(
-        [advantage_lookup.get(int(idx.item()), 0.0) for idx in abs_indices],
-        dtype=torch.float32,
-        device=device,
-    )
-    batch["advantage"] = advantages
-    return batch
 
 
 # ── Validation ───────────────────────────────────────────────────────────────
@@ -583,7 +246,7 @@ def _run_validation(
             break
 
         batch = preprocessor(batch)
-        batch = _inject_advantages(batch, advantage_lookup, device)
+        batch = inject_advantages(batch, advantage_lookup, device)
 
         advantages, _ = policy._compute_advantages(batch)
         true_indicator = advantages > policy.config.advantage_threshold
@@ -818,29 +481,14 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         "from the dataset's 'success' column."
     )
 
-    vn_reward: RewardConfig | None = None
-    c_fail: float = 50.0
-    num_value_bins: int = 50
+    vn_meta = None
     if cfg.policy.enable_advantage_conditioning:
         # Pull num_value_bins, c_fail, and reward config from the value network
         # so the return targets used here match what the VN was trained against.
-        vn_policy_cfg = PreTrainedConfig.from_pretrained(
-            cfg.advantage.value_network_pretrained_path
-        )
-        assert isinstance(vn_policy_cfg, RECAPValueConfig)
-        num_value_bins = int(vn_policy_cfg.num_value_bins)
-
-        vn_train_cfg = _load_vn_train_config(
-            cfg.advantage.value_network_pretrained_path
-        )
-        c_fail = float(vn_train_cfg.get("c_fail", c_fail))
-
-        vn_reward_dict = vn_train_cfg.get("reward")
-        if vn_reward_dict:
-            vn_reward = draccus.decode(RewardConfig, vn_reward_dict)
+        vn_meta = load_vn_metadata(cfg.advantage.value_network_pretrained_path)
         logging.info(
-            f"Pulled from value network: c_fail={c_fail} "
-            f"num_value_bins={num_value_bins} reward={vn_reward}"
+            f"Pulled from value network: c_fail={vn_meta.c_fail} "
+            f"num_value_bins={vn_meta.num_value_bins} reward={vn_meta.reward}"
         )
     else:
         logging.info(
@@ -850,17 +498,19 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
         cfg.policy.advantage_dropout = 1.0
 
     step_rewards: dict[int, float] | None = None
-    if cfg.policy.enable_advantage_conditioning and vn_reward is not None:
+    if vn_meta is not None and vn_meta.reward is not None:
         if is_main:
             logging.info(
                 "Reconstructing per-step rewards from VN reward config "
-                f"(type={vn_reward.type})"
+                f"(type={vn_meta.reward.type})"
             )
-            step_rewards = vn_reward.compute_step_rewards(full_dataset, device)
+            step_rewards = vn_meta.reward.compute_step_rewards(full_dataset, device)
         accelerator.wait_for_everyone()
         if not is_main:
-            step_rewards = vn_reward.compute_step_rewards(full_dataset, device)
+            step_rewards = vn_meta.reward.compute_step_rewards(full_dataset, device)
 
+    c_fail = vn_meta.c_fail if vn_meta is not None else 50.0
+    num_value_bins = vn_meta.num_value_bins if vn_meta is not None else 50
     frame_targets = build_frame_targets(
         dataset=full_dataset,
         success_by_episode=success_by_episode,
@@ -888,91 +538,26 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
 
     # ── 3. Pre-compute advantages using Pi0.5-based value network ────────
     if cfg.policy.enable_advantage_conditioning:
-        vn_reward_mode = vn_reward.type if vn_reward is not None else "steps"
-        vn_maha_stats_path = (
-            vn_reward.stats_path if isinstance(vn_reward, MahaRewardConfig) else None
+        assert vn_meta is not None
+        advantage_lookup, new_threshold = prepare_advantages(
+            cfg=cfg.advantage,
+            dataset=full_dataset,
+            policy_cfg=policy_cfg,
+            vn_meta=vn_meta,
+            success_by_episode=success_by_episode,
+            frame_targets=frame_targets,
+            accelerator=accelerator,
+            num_workers=cfg.num_workers,
         )
-        signature = advantage_cache.compute_signature(
-            dataset_repo_id=cfg.dataset_repo_id,
-            value_network_pretrained_path=cfg.advantage.value_network_pretrained_path,
-            c_fail=c_fail,
-            num_value_bins=num_value_bins,
-            reward_mode=vn_reward_mode,
-            maha_stats_path=vn_maha_stats_path,
-        )
-        cache_file = advantage_cache.cache_path(signature)
-        logging.info(f"Advantage cache signature: {signature} -> {cache_file}")
-
-        if cfg.advantage.cache and cache_file.is_file():
-            advantage_lookup, _ = advantage_cache.load(cache_file)
-        else:
-            if is_main:
-                vn_model = RECAPValueNetwork.from_pretrained(
-                    cfg.advantage.value_network_pretrained_path
-                )
-                advantage_lookup, episode_lookup = _precompute_advantages(
-                    full_dataset=full_dataset,
-                    frame_targets=frame_targets,
-                    value_network=vn_model,
-                    policy_cfg=policy_cfg,
-                    device=device,
-                    batch_size=cfg.advantage.vn_batch_size,
-                    num_workers=cfg.num_workers,
-                )
-                if cfg.advantage.cache:
-                    advantage_cache.save(
-                        cache_file,
-                        advantage_lookup,
-                        episode_lookup=episode_lookup,
-                        metadata={
-                            "signature": signature,
-                            "value_network_pretrained_path": (
-                                cfg.advantage.value_network_pretrained_path
-                            ),
-                            "c_fail": c_fail,
-                            "num_value_bins": num_value_bins,
-                            "reward_mode": vn_reward_mode,
-                            "maha_stats_path": vn_maha_stats_path,
-                            "dataset_repo_id": cfg.dataset_repo_id,
-                            "success_by_episode": success_by_episode,
-                        },
-                    )
-            else:
-                advantage_lookup = None
-            buf = [advantage_lookup]
-            broadcast_object_list(buf, from_process=0)
-            advantage_lookup = buf[0]
-            assert advantage_lookup is not None, "broadcast advantage_lookup is None"
-        if is_main:
-            _log_memory("post-advantage-precompute")
-
-        # ── 3b. Auto-compute advantage threshold from percentile ─────────
-        if cfg.advantage.threshold_percentile is not None:
-            if cfg.advantage.per_task_threshold:
-                # Per-task: shift each advantage by its task threshold and pin
-                # the policy threshold to 0. All downstream code (training,
-                # validation, policy.forward) keeps comparing against a scalar
-                # threshold; the per-task structure lives entirely in the
-                # pre-shifted advantage values.
-                abs_to_task = _build_abs_to_task(full_dataset)
-                task_thresholds = _compute_per_task_thresholds(
-                    advantage_lookup,
-                    abs_to_task,
-                    cfg.advantage.threshold_percentile,
-                )
-                advantage_lookup = _shift_advantages_by_task(
-                    advantage_lookup, abs_to_task, task_thresholds
-                )
-                cfg.policy.advantage_threshold = 0.0
-            else:
-                cfg.policy.advantage_threshold = _compute_advantage_threshold(
-                    advantage_lookup, cfg.advantage.threshold_percentile
-                )
+        if new_threshold is not None:
+            cfg.policy.advantage_threshold = new_threshold
         else:
             logging.info(
                 f"Using fixed advantage_threshold={cfg.policy.advantage_threshold:.5f} "
                 f"(advantage.threshold_percentile is None)"
             )
+        if is_main:
+            _log_memory("post-advantage-precompute")
     else:
         advantage_lookup: dict[int, float] = {}
         logging.info(
@@ -1195,7 +780,7 @@ def run_recap_pistar_train_val(cfg: RECAPPiStarTrainingConfig) -> None:
                 )
 
         batch = preprocessor(batch)
-        batch = _inject_advantages(batch, advantage_lookup, device)
+        batch = inject_advantages(batch, advantage_lookup, device)
 
         with accelerator.autocast():
             loss, output_dict = policy.forward(batch)
