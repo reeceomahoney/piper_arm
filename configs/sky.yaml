@@ -14,7 +14,6 @@ envs:
   WANDB_API_KEY:
   MUJOCO_GL: egl
   PYOPENGL_PLATFORM: egl
-  SLURM_JOB_ID: 0  # suppress tqdm
   CMAKE_POLICY_VERSION_MINIMUM: 3.5
 workdir: .
 
@@ -25,10 +24,11 @@ setup: |
   cd ~/sky_workdir
   pixi config set --local run-post-link-scripts insecure
   pixi install
+  export LD_LIBRARY_PATH="$HOME/sky_workdir/.pixi/envs/default/lib:$LD_LIBRARY_PATH"
 
-  bash ~/sky_workdir/scripts/setup_libero.sh
+  pixi run bash ~/sky_workdir/scripts/setup_libero.sh
   pixi run python ~/sky_workdir/.pixi/envs/default/lib/python3.12/site-packages/robosuite/scripts/setup_macros.py
 
 run: |
   cd ~/sky_workdir
-  pixi run eval
+  pixi run python distal/eval_libero_plus.py
