@@ -3,7 +3,8 @@ strategy:
   max_episode_steps: 400
   end_key: e
   discard_key: d
-  next_key: n
+  success_key: s
+  failure_key: f
 
 inference:
   type: rtc
