@@ -2,9 +2,8 @@ name: distal-train
 
 resources:
   cloud: vast
-  accelerators: RTX5090
-  image_id: docker:nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
-  disk_size: 64
+  accelerators: RTXPRO6000WS
+  disk_size: 128
   autostop:
     idle_minutes: 10
     down: true
@@ -24,11 +23,12 @@ setup: |
   cd ~/sky_workdir
   pixi config set --local run-post-link-scripts insecure
   pixi install
-  export LD_LIBRARY_PATH="$HOME/sky_workdir/.pixi/envs/default/lib:$LD_LIBRARY_PATH"
 
   pixi run bash ~/sky_workdir/scripts/setup_libero.sh
   pixi run python ~/sky_workdir/.pixi/envs/default/lib/python3.12/site-packages/robosuite/scripts/setup_macros.py
 
 run: |
   cd ~/sky_workdir
-  pixi run python distal/eval_libero_plus.py
+  export LD_LIBRARY_PATH="$HOME/sky_workdir/.pixi/envs/default/lib:$LD_LIBRARY_PATH"
+
+  pixi run python distal/train_pi_star.py
