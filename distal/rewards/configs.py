@@ -148,7 +148,7 @@ class KnnRewardConfig(RewardConfig):
 
     base_policy: str = "lerobot/pi05-libero"
     embed_batch_size: int = 128
-    embed_num_workers: int = 8
+    embed_num_workers: int = 4
     k: int = 10
     metric: str = "l2"  # "l2" or "cosine"
     chunk_size: int = 4096
