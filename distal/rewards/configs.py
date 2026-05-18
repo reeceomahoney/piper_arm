@@ -86,7 +86,7 @@ class MahaRewardConfig(RewardConfig):
     base_policy: str = "lerobot/pi05-libero"
     stats_path: str = "reece-omahoney/pi05-maha-stats"
     embed_batch_size: int = 128
-    embed_num_workers: int = 8
+    embed_num_workers: int = 4
 
     def compute_distances(
         self,
