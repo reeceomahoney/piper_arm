@@ -4,11 +4,9 @@ Reads per-frame distances from a ``RewardConfig`` (maha or knn), aggregates
 per episode, and reports AUROC against episode success labels.
 """
 
-import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from importlib.resources import files
 
 import draccus
 import numpy as np
@@ -19,8 +17,8 @@ from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.utils import init_logging
 from sklearn.metrics import roc_auc_score
 
-from distal.collect_libero_plus import sample_task_ids
 from distal.rewards.configs import KnnRewardConfig, RewardConfig
+from distal.variant_names import try_load_variant_names
 
 PERTURBATION_PATTERNS = {
     "language": re.compile(r"_language_"),
@@ -37,47 +35,6 @@ def perturbation_kinds(variant_name: str) -> set[str]:
     return {k for k, p in PERTURBATION_PATTERNS.items() if p.search(variant_name)}
 
 
-def replay_variant_names(
-    suites: list[str], per_cell: int, seed: int, max_tasks: int | None
-) -> list[str]:
-    """Reconstruct per-episode variant names from a collect_libero_plus run.
-
-    Mirrors the iteration order of ``distal.collect_libero_plus.main``:
-    ``for suite in suites: for tid in sample_task_ids(suite)[:max_tasks]``.
-    Independent of ``parallel_envs`` since chunking preserves order.
-
-    Note on the off-by-one: ``task_classification.json`` ids are 1-indexed
-    (1..N) but ``LiberoEnv`` indexes ``suite.tasks[task_id]`` zero-indexed,
-    so the variant actually rolled out for ``tid=K`` is ``entries[K]`` (i.e.
-    JSON id=K+1). For ``tid=N`` (max) ``suite.tasks[N]`` is out of range and
-    ``LiberoEnv`` would have crashed at collection time — those tids are
-    skipped here.
-    """
-    classif = json.loads(
-        (
-            files("libero_plus.libero_plus") / "benchmark" / "task_classification.json"
-        ).read_text()
-    )
-    names: list[str] = []
-    for suite_name in suites:
-        entries = classif[suite_name]
-        ids = sample_task_ids(suite_name, per_cell=per_cell, seed=seed)
-        if max_tasks is not None:
-            ids = ids[:max_tasks]
-        skipped = 0
-        for tid in ids:
-            if tid >= len(entries):
-                skipped += 1
-                continue
-            names.append(entries[tid]["name"])
-        if skipped:
-            print(
-                f"[replay] {suite_name}: skipped {skipped} tid(s) >= "
-                f"{len(entries)} (would have crashed LiberoEnv at collect time)"
-            )
-    return names
-
-
 @dataclass
 class AurocConfig:
     dataset_repo_id: str = "reece-omahoney/pi05-libero-10"
@@ -85,29 +42,6 @@ class AurocConfig:
     min_per_class: int = 10
     device: str = "cuda"
     seed: int = 42
-
-    # Collection config used to produce dataset_repo_id. Must match the values
-    # passed to distal.collect_libero_plus, otherwise the variant replay will
-    # not align with dataset episode_index.
-    suites: list[str] = field(
-        default_factory=lambda: [
-            "libero_spatial",
-            "libero_object",
-            "libero_goal",
-            "libero_10",
-        ]
-    )
-    per_cell: int = 1
-    collect_seed: int = 0
-    max_tasks: int | None = None
-
-    # True for LIBERO-plus rollouts: replays variant names and reports per-kind
-    # AUROC. False for base LIBERO: balanced sample over all episodes, overall
-    # AUROC only.
-    is_libero_plus: bool = False
-
-    # Per-frame distance source. Pick maha or knn via --reward.type; the
-    # 'steps' reward has no distances and will raise NotImplementedError.
     reward: RewardConfig = field(default_factory=KnnRewardConfig)
 
 
@@ -131,20 +65,14 @@ def main(cfg: AurocConfig):
     rng = np.random.default_rng(cfg.seed)
     selected_episodes: set[int] = set()
 
-    if cfg.is_libero_plus:
-        # Replay collection order to map episode_index -> variant name.
-        variant_names = replay_variant_names(
-            cfg.suites, cfg.per_cell, cfg.collect_seed, cfg.max_tasks
-        )
-        if len(variant_names) != len(unique_episodes):
-            print(
-                f"[replay] WARNING: replay produced {len(variant_names)} variants "
-                f"but dataset has {len(unique_episodes)} episodes. Per-kind AUROC "
-                f"alignment is unreliable — investigate before trusting results."
-            )
+    ep_to_variant_loaded = try_load_variant_names(dataset)
+    is_libero_plus = ep_to_variant_loaded is not None
+
+    if is_libero_plus:
         ep_to_variant = {
-            int(ep): name for ep, name in zip(unique_episodes, variant_names)
+            int(ep): ep_to_variant_loaded[int(ep)] for ep in unique_episodes
         }
+        print(f"Loaded variant_names sidecar ({len(ep_to_variant)} episodes)")
 
         # Per-kind balanced subsetting: for each perturbation kind, sample up
         # to episodes_per_kind episodes, half success / half failure. Episodes
@@ -273,7 +201,7 @@ def main(cfg: AurocConfig):
     # Default per-kind score uses the best single aggregator (max for now).
     scores = np.array([ep_scores["max"][ep] for ep in episodes])
 
-    if not cfg.is_libero_plus:
+    if not is_libero_plus:
         return
 
     kinds_per_ep = [
@@ -283,8 +211,8 @@ def main(cfg: AurocConfig):
     n_unlabeled = sum(1 for k in kinds_per_ep if k is None)
     if n_unlabeled:
         print(
-            f"[replay] {n_unlabeled}/{len(episodes)} selected episodes had no "
-            f"replayed variant; excluded from per-kind AUROC."
+            f"{n_unlabeled}/{len(episodes)} selected episodes had no "
+            f"variant in the sidecar; excluded from per-kind AUROC."
         )
 
     print("\nPer-kind AUROC (episodes containing each kind):")
