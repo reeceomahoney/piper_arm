@@ -8,6 +8,17 @@ cpus: 72
 mem: 1600M
 partition: workq
 
+# host: htc
+# remote_path: /data/engs-robotics-ml/kebl6123/distal
+#
+# time: 12
+# gpu: h100
+# ngpu: 1
+# cpus: 16
+# mem: 8G
+# partition: short
+# priority: true
+
 envs:
   - WANDB_API_KEY
   - HF_TOKEN
@@ -20,6 +31,8 @@ envs:
   - PATH: $HOME/.local/bin:$HOME/.pixi/bin:$PWD/.pixi/envs/cu126/bin:$PATH
   - LD_LIBRARY_PATH: $PWD/.pixi/envs/cu126/lib:$LD_LIBRARY_PATH
   - PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+  - CMAKE_POLICY_VERSION_MINIMUM: 3.5
+
 command: |-
   module load cuda/12.6
   # VENV_DIR="$PWD/.pixi/envs/cu126" bash scripts/setup_libero.sh
