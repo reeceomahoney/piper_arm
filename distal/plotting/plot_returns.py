@@ -75,7 +75,6 @@ def plot_return_curves(
                 linestyle=":",
             )
 
-    ax.set_ylim(-1.05, 0.05)
     ax.set_xlabel("trajectory step")
     ax.set_ylabel("normalized return")
     ax.set_title(title)
@@ -110,8 +109,8 @@ def main() -> None:
     cfg = RECAPValueTrainingConfig()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    num_success = 5
-    num_failure = 5
+    num_success = 10
+    num_failure = 0
     num_episodes_to_load = 200
 
     print(
@@ -128,7 +127,6 @@ def main() -> None:
     )
     success_by_episode = load_episode_success_from_dataset(dataset)
 
-    cfg.reward.cache = False
     step_rewards = cfg.reward.compute_step_rewards(dataset=dataset, device=device)
 
     frame_targets = build_frame_targets(
