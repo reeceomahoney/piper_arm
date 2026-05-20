@@ -61,6 +61,21 @@ def collect_images(batch: dict[str, Any], image_size: int) -> Tensor:
     return images
 
 
+@torch.compiler.disable
+def build_mask_and_position_ids(
+    img_mask: Tensor, text_mask: Tensor
+) -> tuple[Tensor, Tensor]:
+    """Build the full attention mask and position ids, forced to run eager.
+
+    Kept out of torch.compile: Inductor's split-scan codegen for this cumsum
+    emits a kernel that triggers a CUDA illegal memory access.
+    """
+    full_mask = torch.cat((img_mask, text_mask), dim=1)
+    position_ids = torch.cumsum(full_mask, dim=1) - 1
+    position_ids = position_ids.masked_fill(~full_mask, 0).long()
+    return full_mask, position_ids
+
+
 if _transformers_available:
     from transformers import AutoModel, SiglipVisionModel
 else:
@@ -248,10 +263,7 @@ class RECAPValueNetwork(PreTrainedPolicy):
 
         # Concat image + language embeddings
         full_embs = torch.cat((img_emb, lang_emb), dim=1)
-        full_mask = torch.cat((img_mask, text_mask), dim=1)
-
-        position_ids = torch.cumsum(full_mask, dim=1) - 1
-        position_ids = position_ids.masked_fill(~full_mask, 0).long()
+        full_mask, position_ids = build_mask_and_position_ids(img_mask, text_mask)
 
         text_dtype = next(self.language_model.parameters()).dtype
         hidden_states = self.language_model(
