@@ -68,6 +68,12 @@ class AdvantageConfig:
     # raw task string.
     per_task_threshold: bool = True
 
+    # When set, use an n-step return instead of the full Monte-Carlo return
+    # when forming advantages: the return bootstraps off the value network
+    # n frames ahead. Frames within n_step of the episode end fall back to
+    # the full MC return. None disables bootstrapping (full Monte-Carlo).
+    n_step: int | None = None
+
     # Value network advantage precomputation batch size
     vn_batch_size: int = 640
 
@@ -406,6 +412,57 @@ def shift_advantages_by_task(
     return shifted
 
 
+# ── n-step returns ───────────────────────────────────────────────────────────
+
+
+def apply_nstep_advantages(
+    advantage_lookup: dict[int, float],
+    dataset: LeRobotDataset,
+    n_step: int,
+) -> dict[int, float]:
+    """Convert Monte-Carlo advantages into n-step advantages.
+
+    The n-step return bootstraps off the value network n frames ahead:
+    ``R_t^(n) = (R_t^MC - R_{t+n}^MC) + V_{t+n}``, so the n-step advantage
+    telescopes to ``A_t^(n) = A_t^MC - A_{t+n}^MC``. Frames whose n-step
+    window reaches the episode's terminal frame keep their full MC advantage.
+
+    The telescoping is exact in unclamped return space; because returns are
+    clamped to [-1, 0], it is exact wherever neither R_t nor R_{t+n} is
+    saturated and only approximate (by at most the n-step normalized reward
+    sum, ~n/max_episode_len) inside fully-saturated episodes. Operating on the
+    (cached) MC advantage lookup means changing ``n_step`` does not invalidate
+    the expensive value-network precompute cache.
+    """
+    if n_step < 1:
+        raise ValueError(f"n_step must be >= 1, got {n_step}")
+
+    episode_infos = build_episode_infos(dataset)
+    nstep_lookup: dict[int, float] = {}
+    bootstrapped = 0
+    for info in episode_infos.values():
+        for abs_idx in range(info.start_index, info.end_index):
+            adv = advantage_lookup.get(abs_idx)
+            if adv is None:
+                continue
+            boot_idx = abs_idx + n_step
+            boot_adv = (
+                advantage_lookup.get(boot_idx) if boot_idx < info.end_index else None
+            )
+            if boot_adv is None:
+                nstep_lookup[abs_idx] = adv  # full MC return
+            else:
+                nstep_lookup[abs_idx] = adv - boot_adv
+                bootstrapped += 1
+
+    logging.info(
+        f"Converted {len(nstep_lookup)} advantages to {n_step}-step returns "
+        f"({bootstrapped} bootstrapped, {len(nstep_lookup) - bootstrapped} "
+        "terminal/full-MC)"
+    )
+    return nstep_lookup
+
+
 # ── Batch injection ──────────────────────────────────────────────────────────
 
 
@@ -445,7 +502,9 @@ def prepare_advantages(
     1. Compute cache signature from dataset + VN metadata.
     2. If cached, load on every rank (cheap JSON parse). Otherwise rank 0 runs
        the VN forward pass and broadcasts the result to the other ranks.
-    3. If ``threshold_percentile`` is set: optionally shift each advantage by
+    3. If ``n_step`` is set, convert the Monte-Carlo advantages into n-step
+       advantages (bootstrapped off the value network n frames ahead).
+    4. If ``threshold_percentile`` is set: optionally shift each advantage by
        its base-task percentile threshold (then the scalar threshold the
        policy should use is ``0.0``); otherwise compute a single global
        threshold over the whole distribution.
@@ -510,6 +569,9 @@ def prepare_advantages(
         advantage_lookup = buf[0]
         assert advantage_lookup is not None, "broadcast advantage_lookup is None"
 
+    if cfg.n_step is not None:
+        advantage_lookup = apply_nstep_advantages(advantage_lookup, dataset, cfg.n_step)
+
     threshold: float | None = None
     if cfg.threshold_percentile is not None:
         if cfg.per_task_threshold:
@@ -533,6 +595,7 @@ def prepare_advantages(
 __all__ = [
     "AdvantageConfig",
     "ValueNetworkMetadata",
+    "apply_nstep_advantages",
     "build_abs_to_task",
     "compute_advantage_threshold",
     "compute_per_task_thresholds",
